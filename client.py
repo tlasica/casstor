@@ -1,0 +1,109 @@
+import time
+from rabin import chunksizes_from_filename as chunker
+from pyblake2 import blake2b
+from cassandra.cluster import Cluster
+from collections import namedtuple
+
+# TODO: blocks stats = how much in duplicates etc
+# TODO: time_stats
+# TODO: parallel write_blocks / non-blocking after reading
+
+Block = namedtuple('Block', ['offset', 'size', 'hash', 'is_new'])
+
+
+class StorageClient(object):
+
+
+    def __init__(self, cassandra_cluster):
+        from cassandra.query import named_tuple_factory
+        self.cluster = cassandra_cluster
+        self.session = self.cluster.connect()
+        self.session.set_keyspace('dedup')
+        self.session.row_factory = named_tuple_factory
+        self.prepared_insert_block = self.session.prepare("insert into blocks(block_hash, block_size, content) values (?,?,?);")
+
+    def maybe_store_block(self, block_hash, block_data):
+        block_exists = self.block_exists(block_hash, block_size=len(block_data))
+        if block_exists:
+            self.inc_block_usage(block_hash, block_size=len(block_data))
+            return False
+        else:
+            self.store_block(block_hash, block_data)
+            return True
+
+    def block_exists(self, block_hash, block_size):
+        q = "select block_hash from blocks where block_hash='{h}' and block_size={s} limit 1;".format(h=block_hash, s=block_size);
+        out = self.session.execute(q)
+        return True if out.current_rows else False
+
+    def inc_block_usage(self, block_hash, block_size):
+        q = "update blocks_usage set num_ref = num_ref + 1 where block_hash='{h}' and block_size={s};".format(h=block_hash, s=block_size);
+        out = self.session.execute(q)
+
+    def store_block(self, block_hash, block_data):
+        block_size = len(block_data)
+        self.session.execute(self.prepared_insert_block, (block_hash, block_size, block_data))
+
+    def store_file(self, dst_path, blocks):
+        prep_insert = self.session.prepare('insert into files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);')
+        for b in blocks:
+            self.session.execute(prep_insert, (dst_path, b.offset, b.hash, b.size))
+
+
+
+def store_file(cass_client, src_path, dst_path):
+    # get chunks as list of data sizes to read
+    chunks = chunker(src_path)
+    blocks = store_blocks(cass_client, src_path, chunks)
+    store_file_descriptor(cass_client, dst_path, blocks)
+    return dst_path, len(chunks)
+
+
+def store_blocks(cass_client, src_path, chunks):
+    ret = []
+    with open(src_path, 'rb') as src_file:
+        for offset, chunk, block in read_file_in_chunks(src_file, chunks):
+            h = blake2b(block, digest_size=32)
+            bh = h.hexdigest()
+            stored = cass_client.maybe_store_block(block_hash=bh, block_data=block)
+            ret.append(Block(offset, chunk, bh, stored ))
+            # print h.hexdigest(), len(block)
+    return ret
+
+def read_file_in_chunks(file_obj, chunks):
+    offset = 0
+    for chunk in chunks:
+        data = file_obj.read(chunk)
+        if not data:
+            break
+        yield offset, chunk, data
+        offset += chunk
+
+
+def store_file_descriptor(cass_client, dst_path, blocks):
+    cass_client.store_file(dst_path, blocks)
+
+
+def storage_client():
+    nodes = ['127.0.0.1','127.0.0.2','127.0.0.3']
+    cluster = Cluster(nodes)
+    return StorageClient(cluster)
+
+
+
+import argparse
+parser = argparse.ArgumentParser(description='Dedup on C* client')
+parser.add_argument('command', type=str, help='command: read or write')
+parser.add_argument('src', type=str, help='source path')
+parser.add_argument('dst', type=str, help='destination path')
+args = parser.parse_args()
+
+storage = storage_client()
+
+if args.command == "write":
+    store_file(storage, args.src, args.dst)
+elif args.command == "read":
+    read_file(storage_client(), args.src, args.dst)
+else:
+    print "unrecognized command"
+    parser.print_help()
