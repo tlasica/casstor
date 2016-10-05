@@ -2,6 +2,8 @@ import time
 from rabin import chunksizes_from_filename as chunker
 from pyblake2 import blake2b
 from cassandra.cluster import Cluster
+from cassandra.query import BatchStatement
+from cassandra import ConsistencyLevel
 from collections import namedtuple
 
 # TODO: blocks stats = how much in duplicates etc
@@ -12,7 +14,6 @@ Block = namedtuple('Block', ['offset', 'size', 'hash', 'is_new'])
 
 
 class StorageClient(object):
-
 
     def __init__(self, cassandra_cluster):
         from cassandra.query import named_tuple_factory
@@ -46,9 +47,10 @@ class StorageClient(object):
 
     def store_file(self, dst_path, blocks):
         prep_insert = self.session.prepare('insert into files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);')
+        batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM)
         for b in blocks:
-            self.session.execute(prep_insert, (dst_path, b.offset, b.hash, b.size))
-
+            batch.add(prep_insert, (dst_path, b.offset, b.hash, b.size))
+        self.session.execute(batch)
 
 
 def store_file(cass_client, src_path, dst_path):
@@ -56,6 +58,7 @@ def store_file(cass_client, src_path, dst_path):
     chunks = chunker(src_path)
     blocks = store_blocks(cass_client, src_path, chunks)
     store_file_descriptor(cass_client, dst_path, blocks)
+    print_file_blocks_stats(blocks)
     return dst_path, len(chunks)
 
 
@@ -78,6 +81,12 @@ def read_file_in_chunks(file_obj, chunks):
             break
         yield offset, chunk, data
         offset += chunk
+
+def print_file_blocks_stats(blocks):
+    size_new_blocks = sum([b.size for b in blocks if b.is_new is True])
+    size_existing_blocks = sum([b.size for b in blocks if b.is_new is False])
+    print "existing blocks [b]: ", size_existing_blocks
+    print "new blocks [b]:", size_new_blocks
 
 
 def store_file_descriptor(cass_client, dst_path, blocks):
