@@ -52,6 +52,18 @@ class StorageClient(object):
             batch.add(prep_insert, (dst_path, b.offset, b.hash, b.size))
         self.session.execute(batch)
 
+    def restore_file_blocks(self, path):
+        q = "select block_offset, block_hash, block_size from files where path='{p}' order by block_offset asc;".format(p=path)
+        out = self.session.execute(q)
+        return [Block(b.block_offset, b.block_size, b.block_hash, None) for b in out.current_rows]
+
+    def restore_blocks(self, blocks):
+        prep_q = self.session.prepare('select content from blocks where block_hash=? and block_size=?')
+        for b in blocks:
+            out = self.session.execute(prep_q, (b.hash, b.size))
+            assert len(out.current_rows) == 1
+            yield out.current_rows[0].content
+
 
 def store_file(cass_client, src_path, dst_path):
     # get chunks as list of data sizes to read
@@ -93,6 +105,13 @@ def store_file_descriptor(cass_client, dst_path, blocks):
     cass_client.store_file(dst_path, blocks)
 
 
+def restore_file(cass_client, src_path, dst_path):
+    blocks = cass_client.restore_file_blocks(src_path)
+    with open(dst_path, 'wb') as dst_file:
+        for b in cass_client.restore_blocks(blocks):
+            dst_file.write(b)
+
+
 def storage_client():
     nodes = ['127.0.0.1','127.0.0.2','127.0.0.3']
     cluster = Cluster(nodes)
@@ -112,7 +131,7 @@ storage = storage_client()
 if args.command == "write":
     store_file(storage, args.src, args.dst)
 elif args.command == "read":
-    read_file(storage_client(), args.src, args.dst)
+    restore_file(storage_client(), args.src, args.dst)
 else:
     print "unrecognized command"
     parser.print_help()
