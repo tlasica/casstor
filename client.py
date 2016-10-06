@@ -1,10 +1,10 @@
-import time
 from rabin import chunksizes_from_filename as chunker
 from pyblake2 import blake2b
 from cassandra.cluster import Cluster
 from cassandra.query import BatchStatement
 from cassandra import ConsistencyLevel
 from collections import namedtuple
+from contexttimer import timer
 
 # TODO: blocks stats = how much in duplicates etc
 # TODO: time_stats
@@ -46,7 +46,8 @@ class StorageClient(object):
         self.session.execute(self.prepared_insert_block, (block_hash, block_size, block_data))
 
     def store_file(self, dst_path, blocks):
-        prep_insert = self.session.prepare('insert into files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);')
+        q = 'insert into files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);'
+        prep_insert = self.session.prepare(q)
         batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM)
         for b in blocks:
             batch.add(prep_insert, (dst_path, b.offset, b.hash, b.size))
@@ -65,6 +66,7 @@ class StorageClient(object):
             yield out.current_rows[0].content
 
 
+@timer()
 def store_file(cass_client, src_path, dst_path):
     # get chunks as list of data sizes to read
     chunks = chunker(src_path)
@@ -85,6 +87,7 @@ def store_blocks(cass_client, src_path, chunks):
             # print h.hexdigest(), len(block)
     return ret
 
+
 def read_file_in_chunks(file_obj, chunks):
     offset = 0
     for chunk in chunks:
@@ -93,6 +96,7 @@ def read_file_in_chunks(file_obj, chunks):
             break
         yield offset, chunk, data
         offset += chunk
+
 
 def print_file_blocks_stats(blocks):
     size_new_blocks = sum([b.size for b in blocks if b.is_new is True])
@@ -104,7 +108,7 @@ def print_file_blocks_stats(blocks):
 def store_file_descriptor(cass_client, dst_path, blocks):
     cass_client.store_file(dst_path, blocks)
 
-
+@timer()
 def restore_file(cass_client, src_path, dst_path):
     blocks = cass_client.restore_file_blocks(src_path)
     with open(dst_path, 'wb') as dst_file:
@@ -113,12 +117,13 @@ def restore_file(cass_client, src_path, dst_path):
 
 
 def storage_client():
-    nodes = ['127.0.0.1','127.0.0.2','127.0.0.3']
+    nodes = ['127.0.0.1', '127.0.0.2', '127.0.0.3']
     cluster = Cluster(nodes)
     return StorageClient(cluster)
 
-
-
+#
+# MAIN
+#
 import argparse
 parser = argparse.ArgumentParser(description='Dedup on C* client')
 parser.add_argument('command', type=str, help='command: read or write')
