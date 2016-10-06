@@ -9,13 +9,13 @@ from cassandra.query import BatchStatement
 from cassandra import ConsistencyLevel
 from collections import namedtuple
 from contexttimer import timer
-from Queue import Queue
+from Queue import Queue, PriorityQueue
 
 # TODO: blocks stats = how much in duplicates etc
 # TODO: time_stats
 # TODO: parallel write_blocks / non-blocking after reading
 
-Block = namedtuple('Block', ['offset', 'size', 'hash', 'is_new'])
+Block = namedtuple('Block', ['offset', 'size', 'hash', 'is_new', 'content'])
 
 
 class StorageClient(object):
@@ -64,14 +64,34 @@ class StorageClient(object):
         q = "select block_offset, block_hash, block_size from files where path='{p}' order by block_offset asc;".format(
             p=path)
         out = self.session.execute(q)
-        return [Block(b.block_offset, b.block_size, b.block_hash, None) for b in out.current_rows]
+        return [Block(b.block_offset, b.block_size, b.block_hash, None, None) for b in out.current_rows]
 
-    def restore_blocks(self, blocks):
-        prep_q = self.session.prepare('select content from blocks where block_hash=? and block_size=?')
-        for b in blocks:
-            out = self.session.execute(prep_q, (b.hash, b.size))
-            assert len(out.current_rows) == 1
-            yield out.current_rows[0].content
+    #TODO: is sharing prepare statement safe?
+    def restore_blocks(self, blocks, output_queue, num_workers=1):
+        # create queue and put all blocks as tasks
+        tasks_queue = Queue()
+        for bl in blocks:
+            tasks_queue.put(bl)
+
+        # start workers
+        def worker():
+            prep_q = self.session.prepare('select content from blocks where block_hash=? and block_size=?')
+            while True:
+                b = tasks_queue.get()
+                out = self.session.execute(prep_q, (b.hash, b.size))
+                assert len(out.current_rows) == 1
+                q_item = Block(b.offset, b.size, b.hash, None, out.current_rows[0].content)
+                tasks_queue.task_done() # here or after output.put()?
+                output_queue.put((b.offset, q_item))
+
+        for i in range(num_workers):
+            t = Thread(target=worker)
+            t.setDaemon(True)
+            t.start()
+
+        # wait for all workers to stop
+        # we cannot wait here as we should not block this function
+        # tasks_queue.join()
 
 
 @timer()
@@ -97,12 +117,12 @@ def store_blocks(cass_client, src_path, chunks, num_workers=8):
             h = blake2b(block, digest_size=32)
             bh = h.hexdigest()
             stored = cass_client.maybe_store_block(block_hash=bh, block_data=block)
-            ret.append(Block(offset, chunk, bh, stored))
+            ret.append(Block(offset, chunk, bh, stored, None))
             queue.task_done()
 
     for i in range(num_workers):
         t = Thread(target=worker)
-        t.daemon = True
+        t.setDaemon(True)
         t.start()
 
     # start reading -> queue
@@ -137,10 +157,29 @@ def store_file_descriptor(cass_client, dst_path, blocks):
 
 @timer()
 def restore_file(cass_client, src_path, dst_path):
+    # restore file blocks
     blocks = cass_client.restore_file_blocks(src_path)
+    # create queue for blocks to be restored, in fact it should be probably priority queue to preserve order?
+    # in this queue we put Block with all the description and content
+    # WARNING: limiting output_queue size can lead to a deadlock
+    output_queue = PriorityQueue()
+    cass_client.restore_blocks(blocks, output_queue, num_workers=4)
+    # TODO: sort blocks?
+    max_output_queue_size = 0
     with open(dst_path, 'wb') as dst_file:
-        for b in cass_client.restore_blocks(blocks):
-            dst_file.write(b)
+        # now we wait for each block to be read
+        for expected_block in blocks:
+            while True:
+                max_output_queue_size = max(max_output_queue_size, output_queue.qsize())
+                offset, block = output_queue.get()
+                if offset == expected_block.offset:
+                    assert block.content is not None
+                    dst_file.write(block.content)
+                    break
+                else:
+                    # print "expected {e} but got {a}".format(e=expected_block.offset, a=offset)
+                    output_queue.put((offset, block))
+    print "max output queue size:", max_output_queue_size
 
 
 def storage_client():
