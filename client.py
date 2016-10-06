@@ -167,17 +167,16 @@ def restore_file(cass_client, src_path, dst_path):
     # TODO: sort blocks?
     max_output_queue_size = 0
     with open(dst_path, 'wb') as dst_file:
+        max_output_queue_size = max(max_output_queue_size, output_queue.qsize())
         # now we wait for each block to be read
         for expected_block in blocks:
             while True:
-                max_output_queue_size = max(max_output_queue_size, output_queue.qsize())
                 offset, block = output_queue.get()
                 if offset == expected_block.offset:
                     assert block.content is not None
                     dst_file.write(block.content)
                     break
                 else:
-                    # print "expected {e} but got {a}".format(e=expected_block.offset, a=offset)
                     output_queue.put((offset, block))
     print "max output queue size:", max_output_queue_size
 
