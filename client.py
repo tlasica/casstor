@@ -2,11 +2,14 @@ import os
 import argparse
 from rabin import chunksizes_from_filename as chunker
 from pyblake2 import blake2b
+from threading import Thread
+
 from cassandra.cluster import Cluster
 from cassandra.query import BatchStatement
 from cassandra import ConsistencyLevel
 from collections import namedtuple
 from contexttimer import timer
+from Queue import Queue
 
 # TODO: blocks stats = how much in duplicates etc
 # TODO: time_stats
@@ -81,25 +84,43 @@ def store_file(cass_client, src_path, dst_path):
     return dst_path, len(chunks)
 
 
-def store_blocks(cass_client, src_path, chunks):
+# TODO: connection pooling would be good idea for storage client
+def store_blocks(cass_client, src_path, chunks, num_workers=8):
     ret = []
-    with open(src_path, 'rb') as src_file:
-        for offset, chunk, block in read_file_in_chunks(src_file, chunks):
+    # create queue witn N elements
+    queue_size = num_workers
+    queue = Queue(queue_size)
+    # create storage Threads
+    def worker():
+        while True:
+            offset, chunk, block = queue.get()
             h = blake2b(block, digest_size=32)
             bh = h.hexdigest()
             stored = cass_client.maybe_store_block(block_hash=bh, block_data=block)
             ret.append(Block(offset, chunk, bh, stored))
-            # print h.hexdigest(), len(block)
+            queue.task_done()
+
+    for i in range(num_workers):
+        t = Thread(target=worker)
+        t.daemon = True
+        t.start()
+
+    # start reading -> queue
+    with open(src_path, 'rb') as src_file:
+        read_file_in_chunks(src_file, chunks, queue)
+    # wait until reading is finished
+    queue.join()
     return ret
 
 
-def read_file_in_chunks(file_obj, chunks):
+def read_file_in_chunks(file_obj, chunks, queue):
     offset = 0
     for chunk in chunks:
         data = file_obj.read(chunk)
         if not data:
             break
-        yield offset, chunk, data
+        x = (offset, chunk, data)
+        queue.put(x)
         offset += chunk
 
 
