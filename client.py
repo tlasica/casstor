@@ -87,6 +87,7 @@ class StorageClient(object):
         # start workers
         def worker():
             prep_q = self.session.prepare('select content from blocks where block_hash=? and block_size=?')
+            prep_q.consistency_level = ConsistencyLevel.LOCAL_ONE
             while True:
                 b = tasks_queue.get()
                 out = self.session.execute(prep_q, (b.hash, b.size))
