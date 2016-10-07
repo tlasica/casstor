@@ -55,10 +55,20 @@ class StorageClient(object):
     def store_file(self, dst_path, blocks):
         q = 'insert into files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);'
         prep_insert = self.session.prepare(q)
+        curr_batch_size = 0
+        max_batch_size = 1001
         batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM)
         for b in blocks:
             batch.add(prep_insert, (dst_path, b.offset, b.hash, b.size))
-        self.session.execute(batch)
+            curr_batch_size += 1
+            if curr_batch_size == max_batch_size:
+                # execute current batch and start new one
+                curr_batch_size = 0
+                self.session.execute(batch)
+                batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM)
+
+        if curr_batch_size > 0:
+            self.session.execute(batch)
 
     def restore_file_blocks(self, path):
         q = "select block_offset, block_hash, block_size from files where path='{p}' order by block_offset asc;".format(
