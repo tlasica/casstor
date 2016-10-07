@@ -32,12 +32,10 @@ class StorageClient(object):
 
     def maybe_store_block(self, block_hash, block_data):
         block_exists = self.block_exists(block_hash, block_size=len(block_data))
-        if block_exists:
-            self.inc_block_usage(block_hash, block_size=len(block_data))
-            return False
-        else:
+        if not block_exists:
             self.store_block(block_hash, block_data)
-            return True
+        self.inc_block_usage(block_hash, block_size=len(block_data))
+        return not block_exists
 
     def block_exists(self, block_hash, block_size):
         q = "select block_hash from blocks where block_hash='{h}' and block_size={s} limit 1;".format(h=block_hash,
