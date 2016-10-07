@@ -167,3 +167,44 @@ for each block in file_blocks:
 ```
 Similar o write this implementation also has performance drawbacks as blcok retrievel from Cassandra database can be use different cluster nodes (with proper partitioning) and thus should be parallelized. We will get to it later.
 
+## Implementation with concurrent C* workers
+
+We expect C* to be a cluster with multiple nodes it makes sense to run multiple C* operations concurrent with multiple workers.
+
+To store the file we need to check or store multiple objects in cassandra. 
+For restore - we need to restore multiple blocks and then sequentially write them to the output file. 
+
+### Write with N cassandra writers
+
+We will need N workers and a queue with limited size to keep blocks read from the source file. 
+
+* Each worker will get block from the queue and store in C*. 
+* File reader will read subsequent chunks from source file and put into the queue.
+* By limiting queue size we can control amount of memory streamed from the source file.
+
+TODO: design image
+
+The code is here: https://github.com/tlasica/casstor/blob/master/client.py#L121-L147
+
+### Read with concurrent C* workers
+We need to restore blocks and write them to destination file in a correct offset sequence.
+The problem is that even if we schedule multiple block reads in the offset order with multiple workers we cannot assume that they will be returned in the offset order. This max implementation more complex.
+
+* We read all the required blocks offsets and hashes and put them into FIFO queue (this is only metadata)
+* Output is a PriorityQueue() prioritized by offset to write data in a right order
+* Each worker get (offset,hash) from the queue, reads block from C* and put into output queue
+* FileWriter expects file blocks from the FIFO queue one by one and reads from the priority queue. If it is a block with expected output - writes it to the destination file, in other case puts the block back to the priority queue
+
+![Concurrent restore design](concurrent-restore-design.jpg)
+
+This solution has two major drawbacks:
+
+1. It can completely block if expected block cannot be read
+2. It can grow the memory usage when one block read is delayed in the worker but other blocks (next ones) are read and put into the output priority queue
+
+To solve above a supervision strategy is required to retry block read after timeout or break the process in such case. It is quite difficult to implement in python prototype, in the production I would probably use [Akka](akka.io).
+
+
+
+
+
