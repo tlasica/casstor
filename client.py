@@ -31,7 +31,7 @@ class StorageClient(object):
         block_exists = self.block_exists(block_hash, block_size=len(block_data))
         if not block_exists:
             self.store_block(block_hash, block_data)
-        self.inc_block_usage(block_hash, block_size=len(block_data))
+        # self.inc_block_usage(block_hash, block_size=len(block_data))
         return not block_exists
 
     def block_exists(self, block_hash, block_size):
@@ -84,7 +84,7 @@ class StorageClient(object):
         # start workers
         def worker():
             prep_q = self.session.prepare('select content from blocks where block_hash=? and block_size=?')
-            prep_q.consistency_level = ConsistencyLevel.LOCAL_ONE
+            prep_q.consistency_level = ConsistencyLevel.ONE
             while True:
                 b = tasks_queue.get()
                 out = self.session.execute(prep_q, (b.hash, b.size))
