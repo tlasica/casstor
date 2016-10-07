@@ -1,8 +1,8 @@
 # CASStor - scalable storage with deduplication on C*
 
 ## Introduction
-I would like to show that implementing scalable cloud storage with hash based block deduplication 
-is quite easy nowadays using existing tools such Cassandra and Spark. 
+I would like to show that implementing scalable cloud storage with hash based block deduplication
+is quite easy nowadays using existing tools such Cassandra and Spark.
 
 My goal was to prototype storage with following features:
 
@@ -12,13 +12,13 @@ My goal was to prototype storage with following features:
 4. Keeps configurable number of block copies
 5. Space reclamation (removal of unused blocks) can be performed in a “cleanup” time (no writes accepted)
 
-The limitation of having read-only period for cleaning up is important 
+The limitation of having read-only period for cleaning up is important
 as implementing read-write space reclamation of unused blocks is a complex distributed task far beyond this prototype.
 
 ### Block deduplication
-Basic idea is that each file stored in our system is divided into chunks of limited size. 
-As we use smart chunking algorithm (rabin fingerprinting) we assume that some files can share chunks. 
-For each chunk system calculates hash (as identifier) and if it is already present in our storage 
+Basic idea is that each file stored in our system is divided into chunks of limited size.
+As we use smart chunking algorithm (rabin fingerprinting) we assume that some files can share chunks.
+For each chunk system calculates hash (as identifier) and if it is already present in our storage
 it is reused by multiple stored files.
 Read more at: https://pibytes.wordpress.com/2013/02/02/deduplication-internals-part-1/
 
@@ -28,8 +28,8 @@ Number of copies of metadata and data can be configured per system.
 Each file and block has same number of copies.
 
 ### Space reclamation
-When files are removed blocks of it are not used anymore. 
-But same block (chunks) can be used by other files. 
+When files are removed blocks of it are not used anymore.
+But same block (chunks) can be used by other files.
 So it is essential to safely remove blocks that are not used anymore at all.
 
 ### Why Cassandra?
@@ -56,7 +56,7 @@ All the data of files stored in CASStor are kept in the Cassandra database. We n
 ### Resiliency
 
 Cassandra keeps data with configurable resiliency using different replication strategies.
-Strategy is configured per *keyspace*. 
+Strategy is configured per *keyspace*.
 By configuring keyspaces differently we can achieve different goals.
 
 First of all it may be reasonable to keep data (blocks) and metadata (files) in different keyspaces:
@@ -95,12 +95,12 @@ Design decisions:
 
 We have to keep blocks (chunks) and be able to easily find requested block by its ID.
 ```sql
-create table blocks(block_hash text, block_size int, content blob, 
+create table blocks(block_hash text, block_size int, content blob,
 primary key(block_hash, block_size));
 ```
 Design decisions:
 
-1. Blocks are identified by its hash. 
+1. Blocks are identified by its hash.
 2. Primary key consists of block_hash and block_size
 3. At the moment there is no important reason to keep block_size as clustering key
 4. C\* partitioner should deal correctly with partition key being already a hash
@@ -171,14 +171,14 @@ Similar o write this implementation also has performance drawbacks as blcok retr
 
 We expect C* to be a cluster with multiple nodes it makes sense to run multiple C* operations concurrent with multiple workers.
 
-To store the file we need to check or store multiple objects in cassandra. 
-For restore - we need to restore multiple blocks and then sequentially write them to the output file. 
+To store the file we need to check or store multiple objects in cassandra.
+For restore - we need to restore multiple blocks and then sequentially write them to the output file.
 
 ### Write with N cassandra writers
 
-We will need N workers and a queue with limited size to keep blocks read from the source file. 
+We will need N workers and a queue with limited size to keep blocks read from the source file.
 
-* Each worker will get block from the queue and store in C*. 
+* Each worker will get block from the queue and store in C*.
 * File reader will read subsequent chunks from source file and put into the queue.
 * By limiting queue size we can control amount of memory streamed from the source file.
 
@@ -218,28 +218,22 @@ I have tried to use ramdisk (tmpfs) but it did not make a difference
 
 |Test|Sequenctial|With workers|Comments|
 |----|----------:|-----------:|--------|
-|new block writes|not tested|3 MB/s|all C* nodes share same SSD|
-|duplicate writes|27 MB/s|50 MB/s|with 8 workers|
-|restore|53 MB/s|63 MS/s|with 4 workers|
+|new block writes|not tested|8 MB/s|all C* nodes share same SSD|
+|duplicate writes|not tested|12 MB/s|with 8 workers|
+|restore|not tested|20 MB/s|with 4 workers|
 
-|Test|Sequenctial|With workers|Comments|
-|----|----------:|-----------:|--------|
-|new block writes|not tested|3 MB/s|all C* nodes share same SSD|
-|duplicate writes|27 MB/s|50 MB/s|with 8 workers|
-|restore|53 MB/s|63 MS/s|with 4 workers|
-
-TODO: I think performance dropped after some changes
+TODO: I think performance dropped after some changes ??????
 
 ### Openstack cluster
 
-For this experiment I used 3 nodes cluster on openstack and additional openstack node serving as a client. 
-Both cluster and client are in the same openstack network. Each cluster node has 8G RAM and 4 VPU. 
+For this experiment I used 3 nodes cluster on openstack and additional openstack node serving as a client.
+Both cluster and client are in the same openstack network. Each cluster node has 8G RAM and 4 VPU.
 Cassandra is using default configuration.
 
 |Test|Throughput|Comments|
 |----|----------:|--------|
-|new block writes|20 MB/s||
-|duplicate writes|31 MB/s||
+|new block writes|25 MB/s||
+|duplicate writes|37 MB/s|Seems like there is an overhead on each C* op|
 |restore|40 MB/s||
 
 Interesting is that difference between duplicates and non-duplicate writes is not that large.
@@ -260,5 +254,3 @@ TCP window size: 85.0 KByte (default)
 ## Summary
 
 ### Next steps
-
-
