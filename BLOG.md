@@ -42,10 +42,10 @@ I have decided for Apache Cassandra for following reasons:
 
 For development and functional testing it is enoough to run cassandra on local machine using ccm (https://github.com/pcmanus/ccm).  This tool let you easily create and manage a multi-node cluster, start stop nodes, run cqlsh etc.
 
-To create a 3 nodes cluster test with C* version 3.7.0 `ccm create test -v 3.7.0 -n 3 -s`
-
-To run cqlsh against one of it’s nodes: `ccm node1 cqlsh`
-
-To start a cluster: `ccm start`
-
-To add node to the cluster: `ccm add node4 -i 127.0.0.4 -j 7400 -b`
+```bash
+ccm create test -v 3.7.0 -n 3 -s  # create a 3 nodes cluster test with C* version 3.7.0 `
+ccm status  # print cluster status
+ccm node1 cqlsh  # run cqlsh on node1
+ccm add node4 -i 127.0.0.4 -j 7400 -b  # add node to the cluster
+ccm start node1  # start newly added node
+```
