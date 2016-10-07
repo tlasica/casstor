@@ -213,13 +213,47 @@ To solve above a supervision strategy is required to retry block read after time
 ### CCM cluster
 
 Those are the results from running client on the same node as 3 nodes ccm cluster on a i7 with 16G and 512M SSD.
+Cassandra was not tuned - used default configuration
+I have tried to use ramdisk (tmpfs) but it did not make a difference
 
-* Cassandra was not tuned - used default configuration
-* I have tried to use ramdisk (tmpfs) but it did not make a difference
+|Test|Sequenctial|With workers|Comments|
+|----|----------:|-----------:|--------|
+|new block writes|not tested|3 MB/s|all C* nodes share same SSD|
+|duplicate writes|27 MB/s|50 MB/s|with 8 workers|
+|restore|53 MB/s|63 MS/s|with 4 workers|
 
-### Real cluster
+|Test|Sequenctial|With workers|Comments|
+|----|----------:|-----------:|--------|
+|new block writes|not tested|3 MB/s|all C* nodes share same SSD|
+|duplicate writes|27 MB/s|50 MB/s|with 8 workers|
+|restore|53 MB/s|63 MS/s|with 4 workers|
 
-For this experiment I used 3 nodes cluster on openstack and additional openstack node serving as a client. Both cluster and client are in the same openstack network. Each cluster node has 8G RAM and 4 VPU. Cassandra is using default configuration.
+TODO: I think performance dropped after some changes
+
+### Openstack cluster
+
+For this experiment I used 3 nodes cluster on openstack and additional openstack node serving as a client. 
+Both cluster and client are in the same openstack network. Each cluster node has 8G RAM and 4 VPU. 
+Cassandra is using default configuration.
+
+|Test|Throughput|Comments|
+|----|----------:|--------|
+|new block writes|20 MB/s||
+|duplicate writes|31 MB/s||
+|restore|40 MB/s||
+
+Interesting is that difference between duplicates and non-duplicate writes is not that large.
+Network is for sure not a problem:
+```
+iperf -c 10.200.176.5
+------------------------------------------------------------
+Client connecting to 10.200.176.5, TCP port 5001
+TCP window size: 85.0 KByte (default)
+------------------------------------------------------------
+[  3] local 10.200.181.123 port 51841 connected with 10.200.176.5 port 5001
+[ ID] Interval       Transfer     Bandwidth
+[  3]  0.0-10.0 sec  7.13 GBytes  6.12 Gbits/sec
+```
 
 ## Caveat found during implementation
 
