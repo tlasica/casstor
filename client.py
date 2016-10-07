@@ -8,15 +8,11 @@ from pyblake2 import blake2b
 from threading import Thread
 
 from cassandra.cluster import Cluster
-from cassandra.query import BatchStatement
+from cassandra.query import BatchStatement, SimpleStatement
 from cassandra import ConsistencyLevel
 from collections import namedtuple
-from contexttimer import timer
 from Queue import Queue, PriorityQueue
 
-# TODO: blocks stats = how much in duplicates etc
-# TODO: time_stats
-# TODO: parallel write_blocks / non-blocking after reading
 
 Block = namedtuple('Block', ['offset', 'size', 'hash', 'is_new', 'content'])
 
@@ -59,6 +55,7 @@ class StorageClient(object):
         curr_batch_size = 0
         max_batch_size = 1001
         batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM)
+        batch.add("delete from files where path='{0}';".format(dst_path))
         for b in blocks:
             batch.add(prep_insert, (dst_path, b.offset, b.hash, b.size))
             curr_batch_size += 1
@@ -187,7 +184,6 @@ def restore_file(cass_client, src_path, dst_path):
     total_size_to_restore = sum([b.size for b in blocks])
     print "total size to restore:", total_size_to_restore
     print "numer of block to restore:", len(blocks)
-    # TODO: sort blocks?
     max_output_queue_size = 0
     offsets_to_write = set([b.offset for b in blocks])
     with open(dst_path, 'wb') as dst_file:
