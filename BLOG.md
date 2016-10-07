@@ -160,7 +160,7 @@ Restoring the file from CASSTOR is the operation that takes file blocks from sto
 
 Sequential operation is quite obvious:
 ```
-file_blocks = cassandra: 
+file_blocks = cassandra: select * from files where path = casstor_file_id order by block_offset;
 for each block in file_blocks:
     r = cassandra: select content from blocks where block_hash = block.hash
     write_block(destination_file, r)
