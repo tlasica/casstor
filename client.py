@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 
 import os
+import time
 import argparse
 from rabin import chunksizes_from_filename as chunker
 from pyblake2 import blake2b
@@ -104,13 +105,14 @@ class StorageClient(object):
             # tasks_queue.join()
 
 
-@timer()
 def store_file(cass_client, src_path, dst_path):
+    t0 = time.time()
     # get chunks as list of data sizes to read
     chunks = chunker(src_path)
     blocks = store_blocks(cass_client, src_path, chunks)
     store_file_descriptor(cass_client, dst_path, blocks)
-    print_file_blocks_stats(blocks)
+    dur = time.time() - t0
+    print_store_stats(blocks, dur)
     return dst_path, len(chunks)
 
 
@@ -155,11 +157,17 @@ def read_file_in_chunks(file_obj, chunks, queue):
         offset += chunk
 
 
-def print_file_blocks_stats(blocks):
+def print_store_stats(blocks, duration):
     size_new_blocks = sum([b.size for b in blocks if b.is_new is True])
     size_existing_blocks = sum([b.size for b in blocks if b.is_new is False])
+    total_size = size_existing_blocks + size_new_blocks
     print "existing blocks [b]: ", size_existing_blocks
     print "new blocks [b]:", size_new_blocks
+    print "total size [b]:", total_size
+    print "duplication ratio:", 100 * float(size_existing_blocks)/total_size
+    print "total duration [s]:", duration
+    thru = total_size / duration / 1024.0 / 1024.0
+    print "throughput MB/s:", thru
 
 
 def store_file_descriptor(cass_client, dst_path, blocks):
