@@ -1,3 +1,5 @@
+#! /usr/bin/env python
+
 import os
 import argparse
 from rabin import chunksizes_from_filename as chunker
@@ -39,13 +41,13 @@ class StorageClient(object):
 
     def block_exists(self, block_hash, block_size):
         q = "select block_hash from blocks where block_hash='{h}' and block_size={s} limit 1;".format(h=block_hash,
-                                                                                                      s=block_size);
+                                                                                                      s=block_size)
         out = self.session.execute(q)
         return True if out.current_rows else False
 
     def inc_block_usage(self, block_hash, block_size):
         q = "update blocks_usage set num_ref = num_ref + 1 where block_hash='{h}' and block_size={s};".format(
-            h=block_hash, s=block_size);
+            h=block_hash, s=block_size)
         out = self.session.execute(q)
 
     def store_block(self, block_hash, block_data):
@@ -66,7 +68,7 @@ class StorageClient(object):
         out = self.session.execute(q)
         return [Block(b.block_offset, b.block_size, b.block_hash, None, None) for b in out.current_rows]
 
-    #TODO: is sharing prepare statement safe?
+    # TODO: is sharing prepare statement safe?
     def restore_blocks(self, blocks, output_queue, num_workers=1):
         # create queue and put all blocks as tasks
         tasks_queue = Queue()
@@ -81,7 +83,7 @@ class StorageClient(object):
                 out = self.session.execute(prep_q, (b.hash, b.size))
                 assert len(out.current_rows) == 1
                 q_item = Block(b.offset, b.size, b.hash, None, out.current_rows[0].content)
-                tasks_queue.task_done() # here or after output.put()?
+                tasks_queue.task_done()  # here or after output.put()?
                 output_queue.put((b.offset, q_item))
 
         for i in range(num_workers):
@@ -89,9 +91,9 @@ class StorageClient(object):
             t.setDaemon(True)
             t.start()
 
-        # wait for all workers to stop
-        # we cannot wait here as we should not block this function
-        # tasks_queue.join()
+            # wait for all workers to stop
+            # we cannot wait here as we should not block this function
+            # tasks_queue.join()
 
 
 @timer()
@@ -110,6 +112,7 @@ def store_blocks(cass_client, src_path, chunks, num_workers=8):
     # create queue witn N elements
     queue_size = num_workers
     queue = Queue(queue_size)
+
     # create storage Threads
     def worker():
         while True:
