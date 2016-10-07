@@ -183,6 +183,8 @@ def restore_file(cass_client, src_path, dst_path):
     # WARNING: limiting output_queue size can lead to a deadlock
     output_queue = PriorityQueue()
     cass_client.restore_blocks(blocks, output_queue, num_workers=4)
+    print "total size to restore:", sum([b.size for b in blocks])
+    print "numer of block to restore:", len(blocks)
     # TODO: sort blocks?
     max_output_queue_size = 0
     offsets_to_write = set([b.offset for b in blocks])
