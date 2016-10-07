@@ -105,5 +105,65 @@ Design decisions:
 3. At the moment there is no important reason to keep block_size as clustering key
 4. C\* partitioner should deal correctly with partition key being already a hash
 
+## Store / Restore Operations
 
+### Write file (store)
+```
+client.py read {source} {casstor_file_id}
+```
+The goal of write is to read source file from local filesystem and write it into CASSTOR under casstor_file_id identifier.
+
+Let's start with simple, sequential implementation:
+
+```
+chunk source file to list of blocks with (offset, size)
+blocks = []
+for each chunk:
+block = read_chunk(source_file, chunk.size)
+H = calculate_hash(block)
+If not exist in C* (H):
+	cassandra: add (H,b) to blocks table
+blocks.append(chunk.offset, H)
+cassandra: delete from files where path = destination
+for each block in blocks:
+	cassandra: add (destination, offset, H) to files table
+```
+Above implementation has some major performance drawbacks:
+
+* source file is read twice: once for chunking and then for storing data
+* cassandra operations can be parallelized to boost performance as the database can handle multiple concurrent writes
+
+#### Chunking
+The goal of chunking is to divide file into parts using rabin fingerint (https://en.wikipedia.org/wiki/Rabin_fingerprint) based on file content in the way, that if similar chunks exists in different files  they will be recognized. It takes source file as input and return a list of pairs (offset, size).  
+
+Interesting feature of this algorithm is that there is some average but also maximum block size which let limit amount of memory used during processing data.
+
+I found two libraries for python
+
+* https://github.com/aitjcize/pyrabin
+* https://github.com/cschwede/python-rabin-fingerprint
+
+Decided to use (2) as slightly faster.
+
+#### Hashing
+For each block we need to calculate hash in the way that the possibility of collision (two blocks having different content will have exactly same hash) is very low. And we need this function to be fast.
+
+I decided to use BLAKE2 (https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE2)  algorithm mostly because I have not used it before.There is an implementation in python for this algorithm: https://pythonhosted.org/pyblake2/
+
+More reading: https://en.wikipedia.org/wiki/Cryptographic_hash_function#Cryptographic_hash_algorithms
+
+### Read file (restore)
+```sql
+client.py read {casstor_file_id} {destination_path}
+```
+Restoring the file from CASSTOR is the operation that takes file blocks from storage and write them to destination file in proper order.
+
+Sequential operation is quite obvious:
+```
+file_blocks = cassandra: 
+for each block in file_blocks:
+    r = cassandra: select content from blocks where block_hash = block.hash
+    write_block(destination_file, r)
+```
+Similar o write this implementation also has performance drawbacks as blcok retrievel from Cassandra database can be use different cluster nodes (with proper partitioning) and thus should be parallelized. We will get to it later.
 
