@@ -185,6 +185,7 @@ def restore_file(cass_client, src_path, dst_path):
     cass_client.restore_blocks(blocks, output_queue, num_workers=4)
     # TODO: sort blocks?
     max_output_queue_size = 0
+    offsets_to_write = set([b.offset for b in blocks])
     with open(dst_path, 'wb') as dst_file:
         max_output_queue_size = max(max_output_queue_size, output_queue.qsize())
         # now we wait for each block to be read
@@ -194,10 +195,12 @@ def restore_file(cass_client, src_path, dst_path):
                 if offset == expected_block.offset:
                     assert block.content is not None
                     dst_file.write(block.content)
+                    offsets_to_write.remove(offset)
                     break
                 else:
                     output_queue.put((offset, block))
     print "max output queue size:", max_output_queue_size
+    assert len(offsets_to_write) == 0, "Missing offsets: " + str(offsets_to_write)
 
 
 def storage_client():
