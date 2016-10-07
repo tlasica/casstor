@@ -174,8 +174,8 @@ def store_file_descriptor(cass_client, dst_path, blocks):
     cass_client.store_file(dst_path, blocks)
 
 
-@timer()
 def restore_file(cass_client, src_path, dst_path):
+    t0 = time.time()
     # restore file blocks
     blocks = [b for b in cass_client.restore_file_blocks(src_path)]
     # create queue for blocks to be restored, in fact it should be probably priority queue to preserve order?
@@ -183,7 +183,8 @@ def restore_file(cass_client, src_path, dst_path):
     # WARNING: limiting output_queue size can lead to a deadlock
     output_queue = PriorityQueue()
     cass_client.restore_blocks(blocks, output_queue, num_workers=4)
-    print "total size to restore:", sum([b.size for b in blocks])
+    total_size_to_restore = sum([b.size for b in blocks])
+    print "total size to restore:", total_size_to_restore
     print "numer of block to restore:", len(blocks)
     # TODO: sort blocks?
     max_output_queue_size = 0
@@ -201,8 +202,12 @@ def restore_file(cass_client, src_path, dst_path):
                     break
                 else:
                     output_queue.put((offset, block))
-    print "max output queue size:", max_output_queue_size
     assert len(offsets_to_write) == 0, "Missing offsets: " + str(offsets_to_write)
+    print "max output queue size:", max_output_queue_size
+    duration = time.time() - t0
+    print "total duration [s]:", duration
+    thru = total_size_to_restore / duration / 1024.0 / 1024.0
+    print "throughput MB/s:", thru
 
 
 def storage_client():
