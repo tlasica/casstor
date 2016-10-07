@@ -34,5 +34,18 @@ So it is essential to safely remove blocks that are not used anymore at all.
 
 ### Why Cassandra?
 I have decided for Apache Cassandra for following reasons:
-It is scalable and has configurable number of copies / consistency
-It is open source and easy to use
+
+1. It is scalable and has configurable number of copies / consistency
+2. t is open source and easy to use
+
+## Running Cassandra
+
+For development and functional testing it is enoough to run cassandra on local machine using ccm (https://github.com/pcmanus/ccm).  This tool let you easily create and manage a multi-node cluster, start stop nodes, run cqlsh etc.
+
+To create a 3 nodes cluster test with C* version 3.7.0 `ccm create test -v 3.7.9 -n 3 -s`
+
+To run cqlsh against one of it’s nodes: `ccm node1 cqlsh`
+
+To start a cluster: `ccm start`
+
+To add node to the cluster: `ccm add node4 -i 127.0.0.4 -j 7400 -b`
