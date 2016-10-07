@@ -74,8 +74,8 @@ class StorageClient(object):
     def restore_file_blocks(self, path):
         q = "select block_offset, block_hash, block_size from files where path='{p}' order by block_offset asc;".format(
             p=path)
-        out = self.session.execute(q)
-        return [Block(b.block_offset, b.block_size, b.block_hash, None, None) for b in out.current_rows]
+        for b in self.session.execute(q):
+            yield Block(b.block_offset, b.block_size, b.block_hash, None, None)
 
     # TODO: is sharing prepare statement safe?
     def restore_blocks(self, blocks, output_queue, num_workers=1):
@@ -177,7 +177,7 @@ def store_file_descriptor(cass_client, dst_path, blocks):
 @timer()
 def restore_file(cass_client, src_path, dst_path):
     # restore file blocks
-    blocks = cass_client.restore_file_blocks(src_path)
+    blocks = [b for b in cass_client.restore_file_blocks(src_path)]
     # create queue for blocks to be restored, in fact it should be probably priority queue to preserve order?
     # in this queue we put Block with all the description and content
     # WARNING: limiting output_queue size can lead to a deadlock
