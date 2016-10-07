@@ -53,13 +53,13 @@ class StorageClient(object):
         q = 'insert into files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);'
         prep_insert = self.session.prepare(q)
         curr_batch_size = 0
-        max_batch_size = 1001
+        max_batch_size = 101
         batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM)
         batch.add("delete from files where path='{0}';".format(dst_path))
         for b in blocks:
             batch.add(prep_insert, (dst_path, b.offset, b.hash, b.size))
             curr_batch_size += 1
-            if curr_batch_size == max_batch_size:
+            if curr_batch_size >= max_batch_size:
                 # execute current batch and start new one
                 curr_batch_size = 0
                 self.session.execute(batch)
