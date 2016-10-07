@@ -1,3 +1,5 @@
+import os
+import argparse
 from rabin import chunksizes_from_filename as chunker
 from pyblake2 import blake2b
 from cassandra.cluster import Cluster
@@ -14,14 +16,14 @@ Block = namedtuple('Block', ['offset', 'size', 'hash', 'is_new'])
 
 
 class StorageClient(object):
-
     def __init__(self, cassandra_cluster):
         from cassandra.query import named_tuple_factory
         self.cluster = cassandra_cluster
         self.session = self.cluster.connect()
         self.session.set_keyspace('dedup')
         self.session.row_factory = named_tuple_factory
-        self.prepared_insert_block = self.session.prepare("insert into blocks(block_hash, block_size, content) values (?,?,?);")
+        self.prepared_insert_block = self.session.prepare(
+            "insert into blocks(block_hash, block_size, content) values (?,?,?);")
 
     def maybe_store_block(self, block_hash, block_data):
         block_exists = self.block_exists(block_hash, block_size=len(block_data))
@@ -33,12 +35,14 @@ class StorageClient(object):
             return True
 
     def block_exists(self, block_hash, block_size):
-        q = "select block_hash from blocks where block_hash='{h}' and block_size={s} limit 1;".format(h=block_hash, s=block_size);
+        q = "select block_hash from blocks where block_hash='{h}' and block_size={s} limit 1;".format(h=block_hash,
+                                                                                                      s=block_size);
         out = self.session.execute(q)
         return True if out.current_rows else False
 
     def inc_block_usage(self, block_hash, block_size):
-        q = "update blocks_usage set num_ref = num_ref + 1 where block_hash='{h}' and block_size={s};".format(h=block_hash, s=block_size);
+        q = "update blocks_usage set num_ref = num_ref + 1 where block_hash='{h}' and block_size={s};".format(
+            h=block_hash, s=block_size);
         out = self.session.execute(q)
 
     def store_block(self, block_hash, block_data):
@@ -54,7 +58,8 @@ class StorageClient(object):
         self.session.execute(batch)
 
     def restore_file_blocks(self, path):
-        q = "select block_offset, block_hash, block_size from files where path='{p}' order by block_offset asc;".format(p=path)
+        q = "select block_offset, block_hash, block_size from files where path='{p}' order by block_offset asc;".format(
+            p=path)
         out = self.session.execute(q)
         return [Block(b.block_offset, b.block_size, b.block_hash, None) for b in out.current_rows]
 
@@ -83,7 +88,7 @@ def store_blocks(cass_client, src_path, chunks):
             h = blake2b(block, digest_size=32)
             bh = h.hexdigest()
             stored = cass_client.maybe_store_block(block_hash=bh, block_data=block)
-            ret.append(Block(offset, chunk, bh, stored ))
+            ret.append(Block(offset, chunk, bh, stored))
             # print h.hexdigest(), len(block)
     return ret
 
@@ -108,6 +113,7 @@ def print_file_blocks_stats(blocks):
 def store_file_descriptor(cass_client, dst_path, blocks):
     cass_client.store_file(dst_path, blocks)
 
+
 @timer()
 def restore_file(cass_client, src_path, dst_path):
     blocks = cass_client.restore_file_blocks(src_path)
@@ -117,14 +123,15 @@ def restore_file(cass_client, src_path, dst_path):
 
 
 def storage_client():
-    nodes = ['127.0.0.1', '127.0.0.2', '127.0.0.3']
+    nodes = os.getenv('CASSTOR_NODES', '127.0.0.1').split(',')
     cluster = Cluster(nodes)
     return StorageClient(cluster)
+
 
 #
 # MAIN
 #
-import argparse
+
 parser = argparse.ArgumentParser(description='Dedup on C* client')
 parser.add_argument('command', type=str, help='command: read or write')
 parser.add_argument('src', type=str, help='source path')
