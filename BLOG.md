@@ -182,7 +182,7 @@ We will need N workers and a queue with limited size to keep blocks read from th
 * File reader will read subsequent chunks from source file and put into the queue.
 * By limiting queue size we can control amount of memory streamed from the source file.
 
-TODO: design image
+![Concurrent write design](concurrent-write-design.jpg)
 
 The code is here: https://github.com/tlasica/casstor/blob/master/client.py#L121-L147
 
@@ -202,9 +202,29 @@ This solution has two major drawbacks:
 1. It can completely block if expected block cannot be read
 2. It can grow the memory usage when one block read is delayed in the worker but other blocks (next ones) are read and put into the output priority queue
 
+Code for cassandra workers: https://github.com/tlasica/casstor/blob/master/client.py#L78-L99
+
+and code for file writer: https://github.com/tlasica/casstor/blob/master/client.py#L175-L207
+
 To solve above a supervision strategy is required to retry block read after timeout or break the process in such case. It is quite difficult to implement in python prototype, in the production I would probably use [Akka](akka.io).
 
+## Performance results
 
+### CCM cluster
 
+Those are the results from running client on the same node as 3 nodes ccm cluster on a i7 with 16G and 512M SSD.
+
+* Cassandra was not tuned - used default configuration
+* I have tried to use ramdisk (tmpfs) but it did not make a difference
+
+### Real cluster
+
+For this experiment I used 3 nodes cluster on openstack and additional openstack node serving as a client. Both cluster and client are in the same openstack network. Each cluster node has 8G RAM and 4 VPU. Cassandra is using default configuration.
+
+## Caveat found during implementation
+
+## Summary
+
+### Next steps
 
 
