@@ -35,7 +35,7 @@ class StorageClient(object):
         block_exists = self.block_exists(block_hash, block_size=len(block_data))
         if not block_exists:
             self.store_block(block_hash, block_data)
-        self.inc_block_usage(block_hash, block_size=len(block_data))
+        # self.inc_block_usage(block_hash, block_size=len(block_data))
         return not block_exists
 
     def block_exists(self, block_hash, block_size):
