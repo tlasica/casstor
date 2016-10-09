@@ -10,7 +10,7 @@ from threading import Thread
 from cassandra.cluster import Cluster
 from cassandra.query import BatchStatement, SimpleStatement
 from cassandra import ConsistencyLevel
-from collections import namedtuple
+from collections import namedtuple, deque
 from Queue import Queue, PriorityQueue
 
 
@@ -77,21 +77,37 @@ class StorageClient(object):
     # TODO: is sharing prepare statement safe?
     def restore_blocks(self, blocks, output_queue, num_workers=1):
         # create queue and put all blocks as tasks
-        tasks_queue = Queue()
-        for bl in blocks:
-            tasks_queue.put(bl)
+        tasks_queue = deque(blocks)
+
+        def get_tasks_from_queue(n):
+            ret = []
+            try:
+                for i in xrange(n):
+                    ret.append(tasks_queue.pop())
+                return ret
+            except IndexError:
+                return ret
 
         # start workers
         def worker():
-            prep_q = self.session.prepare('select content from blocks where block_hash=? and block_size=?')
+            prep_q = self.session.prepare('select block_hash, content from blocks where block_hash in (?,?,?,?,?);')
             prep_q.consistency_level = ConsistencyLevel.ONE
             while True:
-                b = tasks_queue.get()
-                out = self.session.execute(prep_q, (b.hash, b.size))
-                assert len(out.current_rows) == 1
-                q_item = Block(b.offset, b.size, b.hash, None, out.current_rows[0].content)
-                tasks_queue.task_done()  # here or after output.put()?
-                output_queue.put((b.offset, q_item))
+                batch_size = 5
+                tasks = get_tasks_from_queue(batch_size)
+                hash_list = ([t.hash for t in tasks] + ['0'] * batch_size)[:batch_size]
+                out = self.session.execute(prep_q, hash_list)
+                assert len(out.current_rows) == len(tasks)
+                print "restored", len(out.current_rows), "blocks"
+                retrieved_blocks = {r.block_hash: r.content for r in out}
+                # TODO: content from output but metadata from block?
+                for b in tasks:
+                    q_item = Block(b.offset, b.size, b.hash, None, retrieved_blocks.get(b.hash))
+                    if q_item.content is not None:
+                        output_queue.put((b.offset, q_item))
+                # finish thread if no enought tasks in the queue
+                if len(tasks) < batch_size:
+                    break
 
         for i in range(num_workers):
             t = Thread(target=worker)
