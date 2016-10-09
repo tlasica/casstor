@@ -84,28 +84,28 @@ class StorageClient(object):
             try:
                 for i in xrange(n):
                     ret.append(tasks_queue.pop())
-                return ret
             except IndexError:
-                return ret
+                pass
+            return ret
 
         # start workers
         def worker():
             prep_q = self.session.prepare('select block_hash, content from blocks where block_hash in (?,?,?,?,?);')
             prep_q.consistency_level = ConsistencyLevel.ONE
+            batch_size = 5
             while True:
-                batch_size = 5
+                # read N blocks
                 tasks = get_tasks_from_queue(batch_size)
-                hash_list = ([t.hash for t in tasks] + ['0'] * batch_size)[:batch_size]
+                hash_list = ([t.hash for t in tasks] + ['0'] * batch_size)[:batch_size]  # trick to fill list with 0s
                 out = self.session.execute(prep_q, hash_list)
                 assert len(out.current_rows) == len(tasks)
-                print "restored", len(out.current_rows), "blocks"
                 retrieved_blocks = {r.block_hash: r.content for r in out}
-                # TODO: content from output but metadata from block?
+                # add retrieved blocks to output queue
                 for b in tasks:
                     q_item = Block(b.offset, b.size, b.hash, None, retrieved_blocks.get(b.hash))
                     if q_item.content is not None:
                         output_queue.put((b.offset, q_item))
-                # finish thread if no enought tasks in the queue
+                # finish thread if no enough tasks in the queue
                 if len(tasks) < batch_size:
                     break
 
