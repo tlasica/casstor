@@ -50,12 +50,12 @@ class StorageClient(object):
         self.session.execute(self.prepared_insert_block, (block_hash, block_size, block_data))
 
     def store_file(self, dst_path, blocks):
+        self.session.execute("delete from files where path='{0}';".format(dst_path))
         q = 'insert into files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);'
         prep_insert = self.session.prepare(q)
         curr_batch_size = 0
         max_batch_size = 101
         batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM)
-        batch.add("delete from files where path='{0}';".format(dst_path))
         for b in blocks:
             batch.add(prep_insert, (dst_path, b.offset, b.hash, b.size))
             curr_batch_size += 1
