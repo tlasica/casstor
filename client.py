@@ -13,6 +13,7 @@ from cassandra import ConsistencyLevel
 from collections import namedtuple, deque
 from Queue import Queue, PriorityQueue
 
+from contexttimer import timer
 
 Block = namedtuple('Block', ['offset', 'size', 'hash', 'is_new', 'content'])
 
@@ -119,14 +120,20 @@ class StorageClient(object):
             # tasks_queue.join()
 
 
+@timer()
+def check_block_exists(cass_client, blocks):
+    for b in blocks:
+        cass_client.block_exists(b.hash, b.size)
+
+
 def store_file(cass_client, src_path, dst_path):
     t0 = time.time()
-    # get chunks as list of data sizes to read
-    chunks = chunker(src_path)
+    chunks = chunker(src_path)  # get chunks as list of data sizes to read
     blocks = store_blocks(cass_client, src_path, chunks)
     store_file_descriptor(cass_client, dst_path, blocks)
     dur = time.time() - t0
     print_store_stats(blocks, dur)
+    check_block_exists(cass_client, blocks)
     return dst_path, len(chunks)
 
 
