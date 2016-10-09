@@ -157,9 +157,9 @@ def store_blocks(cass_client, src_path, chunks, num_workers=4):
                 h = blake2b(c.content, digest_size=32)
                 hashes.append(h.hexdigest())
             # confirm exists or store blocks from chunks
-            for c,h in zip(chunks, hashes):
+            for c, h in zip(chunks, hashes):
                 is_stored = cass_client.maybe_store_block(block_hash=h, block_data=c.content)
-                ret.append(Block(c.offset, c.size, c.hash, is_stored, None))
+                ret.append(Block(c.offset, c.size, h, is_stored, None))
             queue.task_done()
 
     for i in range(num_workers):
