@@ -27,7 +27,7 @@ class StorageClient(object):
         self.prepared_insert_block = self.session.prepare(
             "insert into blocks(block_hash, block_size, content) values (?,?,?);")
         self.prepared_check_block = self.session.prepare(
-            "select block_hash from blocks where block_hash=?;")
+            "select count(*) from blocks where block_hash=?;")
 
     def maybe_store_block(self, block_hash, block_data):
         block_exists = self.block_exists(block_hash, block_size=len(block_data))
@@ -38,7 +38,7 @@ class StorageClient(object):
 
     def block_exists(self, block_hash, block_size):
         out = self.session.execute(self.prepared_check_block, [block_hash])
-        return True if out.current_rows else False
+        return True if out.current_rows[0].count>0 else False
 
     def inc_block_usage(self, block_hash, block_size):
         q = "update blocks_usage set num_ref = num_ref + 1 where block_hash='{h}' and block_size={s};".format(
