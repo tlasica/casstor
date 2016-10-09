@@ -50,6 +50,22 @@ class StorageClient(object):
         block_size = len(block_data)
         self.session.execute(self.prepared_insert_block, (block_hash, block_size, block_data))
 
+    def maybe_store_chunks(self, chunks):
+        assert len(chunks) <= 5
+        # let's check which of them exists
+        prep_check_block = self.session.prepare("select block_hash, block_size from blocks where block_hash in (?,?,?,?,?);")
+        hashes = [c.hash for c in chunks]
+        hashes = (hashes + ['0'] * 5)[:5]
+        existing_blocks = {r.block_hash: r.block_size for r in self.session.execute(prep_check_block, hashes)}
+        ret = []
+        for c in chunks:
+            exists = existing_blocks.get(c.hash) is not None
+            if not exists:
+                self.store_block(c.hash, c.content)
+            ret.append(Block(c.offset, c.size, c.hash, not exists, None))
+        return ret
+
+
     def store_file(self, dst_path, blocks):
         self.session.execute("delete from files where path='{0}';".format(dst_path))
         q = 'insert into files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);'
@@ -157,9 +173,10 @@ def store_blocks(cass_client, src_path, chunks, num_workers=4):
                 h = blake2b(c.content, digest_size=32)
                 hashes.append(h.hexdigest())
             # confirm exists or store blocks from chunks
-            for c, h in zip(chunks, hashes):
-                is_stored = cass_client.maybe_store_block(block_hash=h, block_data=c.content)
-                ret.append(Block(c.offset, c.size, h, is_stored, None))
+            chunks_with_hashes = [Block(c.offset, c.size, h, None, c.content) for c, h in zip(chunks, hashes)]
+            stored_blocks = cass_client.maybe_store_chunks(chunks_with_hashes)
+            # add to results, work done
+            ret.extend(stored_blocks)
             queue.task_done()
 
     for i in range(num_workers):
