@@ -37,7 +37,7 @@ class StorageClient(object):
         return not block_exists
 
     def block_exists(self, block_hash, block_size):
-        out = self.session.execute(self.prepared_check_block, (block_hash))
+        out = self.session.execute(self.prepared_check_block, [block_hash])
         return True if out.current_rows else False
 
     def inc_block_usage(self, block_hash, block_size):
