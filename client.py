@@ -136,25 +136,30 @@ def store_file(cass_client, src_path, dst_path):
     store_file_descriptor(cass_client, dst_path, blocks)
     dur = time.time() - t0
     print_store_stats(blocks, dur)
-    check_block_exists(cass_client, blocks)
+    # check_block_exists(cass_client, blocks)
     return dst_path, len(chunks)
 
 
 # TODO: connection pooling would be good idea for storage client
-def store_blocks(cass_client, src_path, chunks, num_workers=8):
+def store_blocks(cass_client, src_path, chunks, num_workers=4):
     ret = []
-    # create queue witn N elements
+    # create queue with N elements
     queue_size = num_workers
     queue = Queue(queue_size)
 
     # create storage Threads
     def worker():
         while True:
-            offset, chunk, block = queue.get()
-            h = blake2b(block, digest_size=32)
-            bh = h.hexdigest()
-            stored = cass_client.maybe_store_block(block_hash=bh, block_data=block)
-            ret.append(Block(offset, chunk, bh, stored, None))
+            chunks = queue.get()
+            # calculate hash for chunks
+            hashes = []
+            for c in chunks:
+                h = blake2b(c.content, digest_size=32)
+                hashes.append(h.hexdigest())
+            # confirm exists or store blocks from chunks
+            for c,h in zip(chunks, hashes):
+                is_stored = cass_client.maybe_store_block(block_hash=h, block_data=c.content)
+                ret.append(Block(c.offset, c.size, c.hash, is_stored, None))
             queue.task_done()
 
     for i in range(num_workers):
@@ -164,21 +169,27 @@ def store_blocks(cass_client, src_path, chunks, num_workers=8):
 
     # start reading -> queue
     with open(src_path, 'rb') as src_file:
-        read_file_in_chunks(src_file, chunks, queue)
+        read_file_in_chunks(src_file, chunks, queue, batch_size=5)
     # wait until reading is finished
     queue.join()
     return ret
 
 
-def read_file_in_chunks(file_obj, chunks, queue):
+def read_file_in_chunks(file_obj, chunks, queue, batch_size=1):
     offset = 0
-    for chunk in chunks:
-        data = file_obj.read(chunk)
+    batch = []
+    for chunk_size in chunks:
+        data = file_obj.read(chunk_size)
         if not data:
             break
-        x = (offset, chunk, data)
-        queue.put(x)
-        offset += chunk
+        batch.append(Block(offset, chunk_size, None, None, data))
+        if len(batch) == batch_size:
+            queue.put(batch)
+            batch = []
+        offset += chunk_size
+
+    if batch:
+        queue.put(batch)
 
 
 def print_store_stats(blocks, duration):
