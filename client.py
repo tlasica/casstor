@@ -97,7 +97,10 @@ class StorageClient(object):
             while True:
                 # read N blocks
                 tasks = get_tasks_from_queue(batch_size)
-                hash_list = ([t.hash for t in tasks] + ['0'] * batch_size)[:batch_size]  # trick to fill list with 0s
+                if not tasks:
+                    break
+                hash_list = [t.hash for t in tasks]
+                hash_list = (hash_list + ['0'] * batch_size)[:batch_size]  # trick to fill list with 0s
                 out = self.session.execute(prep_q, hash_list)
                 assert len(out.current_rows) == len(tasks)
                 retrieved_blocks = {r.block_hash: r.content for r in out}
