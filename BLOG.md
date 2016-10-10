@@ -51,7 +51,8 @@ ccm start node1  # start newly added node
 ```
 ## Data model
 
-All the data of files stored in CASStor are kept in the Cassandra database. We need to store individual blocks (chunks) and how files are composed suing those blocks. We need to manage resiliency in case of a hdd or node failure.
+All the data of files stored in CASStor are kept in the Cassandra database. We need to store individual blocks (chunks) and how files are composed suing those blocks. 
+We need to manage resiliency in case of a hdd or node failure.
 
 ### Resiliency
 
@@ -62,7 +63,8 @@ By configuring keyspaces differently we can achieve different goals.
 First of all it may be reasonable to keep data (blocks) and metadata (files) in different keyspaces:
 
 1. we may need to keep different number of copies as the size of data is different or to speed up some operations
-2. we may want to perform maintenance on data and metadata separately e.g. repair or calculate amount of data
+2. We may want to configure caches (row, key, etc.) differently for data and metadata
+3. we may want to perform maintenance on data and metadata separately e.g. repair or calculate amount of data
 
 So lets create two keyspaces to keep 3 replicas of metadata and 2 of data
 ```
@@ -208,23 +210,7 @@ and code for file writer: https://github.com/tlasica/casstor/blob/master/client.
 
 To solve above a supervision strategy is required to retry block read after timeout or break the process in such case. It is quite difficult to implement in python prototype, in the production I would probably use [Akka](akka.io).
 
-## Performance results
-
-### CCM cluster
-
-Those are the results from running client on the same node as 3 nodes ccm cluster on a i7 with 16G and 512M SSD.
-Cassandra was not tuned - used default configuration
-I have tried to use ramdisk (tmpfs) but it did not make a difference
-
-|Test|Sequenctial|With workers|Comments|
-|----|----------:|-----------:|--------|
-|new block writes|not tested|8 MB/s|all C* nodes share same SSD|
-|duplicate writes|not tested|12 MB/s|with 8 workers|
-|restore|not tested|20 MB/s|with 4 workers|
-
-TODO: I think performance dropped after some changes ??????
-
-### Openstack cluster
+## Performance results and optimizations
 
 For this experiment I used 3 nodes cluster on openstack and additional openstack node serving as a client.
 Both cluster and client are in the same openstack network. Each cluster node has 8G RAM and 4 VPU.
@@ -237,7 +223,11 @@ Cassandra is using default configuration.
 |restore|40 MB/s||
 
 Interesting is that difference between duplicates and non-duplicate writes is not that large.
-Network is for sure not a problem:
+
+
+### Can network be a problem?
+
+Seems the network is not a problem:
 ```
 iperf -c 10.200.176.5
 ------------------------------------------------------------
@@ -248,6 +238,206 @@ TCP window size: 85.0 KByte (default)
 [ ID] Interval       Transfer     Bandwidth
 [  3]  0.0-10.0 sec  7.13 GBytes  6.12 Gbits/sec
 ```
+
+### Read optimization by reading N rows in one query
+
+To restore the file from storage is is required to read every single block.
+Even with multiple C* workers each of them is asking for only one relatively small block.
+I suspect there is significant overhead with query handling.
+Simple solution was to ask for N blocks in one query using `IN (...)` clause.
+```python
+prep_q = self.session.prepare('select block_hash, content from blocks where block_hash in (?,?,?,?,?);')
+hash_list = [t.hash for t in tasks]
+hash_list = (hash_list + ['0'] * batch_size)[:batch_size]  # trick to fill list with 0s
+out = session.execute(prep_q, hash_list)
+```
+
+Improvement is significant: from 40 MB/s to 58 MB/s.
+
+The solution is not elegant with hardcoded batch size but it is not possible to batch selects :-) 
+
+### Minor gains with using LIMIT
+
+If the code expects up to N rows then it may benefit to limit the result using `LIMIT n` clause:
+
+* in store() operation for checking block existance
+* in restore() operation for retrieving blocks 
+
+|Test|Throughput|Comments|
+|----|----------:|--------|
+|new block writes|26 MB/s|small gain|
+|duplicate writes|43 MB/s|gain from 40 MB/s|
+|restore|61 MB/s|gain from 58 MB/s|
+
+The reason why is not obvious, so let's check query plans.
+To see the difference let's insert blocks with hashes: a,b,c,d,e.
+```sql
+qlsh> select block_hash from dedup.blocks where block_hash in ('a','b','c','d','e') limit 5;
+
+ block_hash
+------------
+          a
+          b
+          c
+          d
+          e
+
+(5 rows)
+
+Tracing session: e8d195c0-8ef5-11e6-82b1-d3d302e39b20
+
+ activity                                                                                                             | timestamp                  | source        | source_elapsed
+----------------------------------------------------------------------------------------------------------------------+----------------------------+---------------+----------------
+                                                                                                   Execute CQL3 query | 2016-10-10 14:29:10.556000 |  10.200.176.5 |              0
+                                   READ message received from /10.200.176.5 [MessagingService-Incoming-/10.200.176.5] | 2016-10-10 14:29:07.764000 | 10.200.176.51 |             25
+                                   READ message received from /10.200.176.5 [MessagingService-Incoming-/10.200.176.5] | 2016-10-10 14:29:07.765000 | 10.200.176.51 |            140
+                                   READ message received from /10.200.176.5 [MessagingService-Incoming-/10.200.176.5] | 2016-10-10 14:29:07.765000 | 10.200.176.51 |            179
+                                   READ message received from /10.200.176.5 [MessagingService-Incoming-/10.200.176.5] | 2016-10-10 14:29:07.765000 | 10.200.176.51 |            217
+                                                     Executing single-partition query on blocks [SharedPool-Worker-1] | 2016-10-10 14:29:07.765000 | 10.200.176.51 |            238
+                                                                   Acquiring sstable references [SharedPool-Worker-1] | 2016-10-10 14:29:07.765000 | 10.200.176.51 |            289
+                                                                      Merging memtable contents [SharedPool-Worker-1] | 2016-10-10 14:29:07.765000 | 10.200.176.51 |            311
+                                                              Read 1 live and 1 tombstone cells [SharedPool-Worker-1] | 2016-10-10 14:29:07.765001 | 10.200.176.51 |            449
+                                                     Executing single-partition query on blocks [SharedPool-Worker-2] | 2016-10-10 14:29:07.765001 | 10.200.176.51 |            464
+                                                                   Acquiring sstable references [SharedPool-Worker-2] | 2016-10-10 14:29:07.765001 | 10.200.176.51 |            489
+                                                            Enqueuing response to /10.200.176.5 [SharedPool-Worker-1] | 2016-10-10 14:29:07.765001 | 10.200.176.51 |            496
+                                                                      Merging memtable contents [SharedPool-Worker-2] | 2016-10-10 14:29:07.765001 | 10.200.176.51 |            504
+                                                     Executing single-partition query on blocks [SharedPool-Worker-4] | 2016-10-10 14:29:07.765001 | 10.200.176.51 |            581
+                                                              Read 1 live and 1 tombstone cells [SharedPool-Worker-2] | 2016-10-10 14:29:07.765001 | 10.200.176.51 |            602
+                                                                   Acquiring sstable references [SharedPool-Worker-4] | 2016-10-10 14:29:07.765001 | 10.200.176.51 |            626
+                                                            Enqueuing response to /10.200.176.5 [SharedPool-Worker-2] | 2016-10-10 14:29:07.765001 | 10.200.176.51 |            636
+                                                                      Merging memtable contents [SharedPool-Worker-4] | 2016-10-10 14:29:07.765002 | 10.200.176.51 |            647
+                                                              Read 1 live and 1 tombstone cells [SharedPool-Worker-4] | 2016-10-10 14:29:07.765002 | 10.200.176.51 |            731
+                                                            Enqueuing response to /10.200.176.5 [SharedPool-Worker-4] | 2016-10-10 14:29:07.765002 | 10.200.176.51 |            763
+                          Sending REQUEST_RESPONSE message to /10.200.176.5 [MessagingService-Outgoing-/10.200.176.5] | 2016-10-10 14:29:07.765002 | 10.200.176.51 |            872
+                                                     Executing single-partition query on blocks [SharedPool-Worker-3] | 2016-10-10 14:29:07.766000 | 10.200.176.51 |           1110
+                                                                   Acquiring sstable references [SharedPool-Worker-3] | 2016-10-10 14:29:07.766000 | 10.200.176.51 |           1135
+                                                                      Merging memtable contents [SharedPool-Worker-3] | 2016-10-10 14:29:07.766000 | 10.200.176.51 |           1147
+                                                              Read 1 live and 1 tombstone cells [SharedPool-Worker-3] | 2016-10-10 14:29:07.766001 | 10.200.176.51 |           1244
+                                                            Enqueuing response to /10.200.176.5 [SharedPool-Worker-3] | 2016-10-10 14:29:07.766001 | 10.200.176.51 |           1286
+                          Sending REQUEST_RESPONSE message to /10.200.176.5 [MessagingService-Outgoing-/10.200.176.5] | 2016-10-10 14:29:07.770000 | 10.200.176.51 |           5154
+                          Sending REQUEST_RESPONSE message to /10.200.176.5 [MessagingService-Outgoing-/10.200.176.5] | 2016-10-10 14:29:07.771000 | 10.200.176.51 |           6686
+                          Sending REQUEST_RESPONSE message to /10.200.176.5 [MessagingService-Outgoing-/10.200.176.5] | 2016-10-10 14:29:07.772000 | 10.200.176.51 |           7247
+ Parsing select block_hash from dedup.blocks where block_hash in ('a','b','c','d','e') limit 5; [SharedPool-Worker-1] | 2016-10-10 14:29:10.557000 |  10.200.176.5 |            216
+                                                                            Preparing statement [SharedPool-Worker-1] | 2016-10-10 14:29:10.557000 |  10.200.176.5 |            350
+                                                               reading data from /10.200.176.51 [SharedPool-Worker-1] | 2016-10-10 14:29:10.557000 |  10.200.176.5 |            614
+                                                               reading data from /10.200.176.51 [SharedPool-Worker-1] | 2016-10-10 14:29:10.557000 |  10.200.176.5 |            681
+                                                               reading data from /10.200.176.51 [SharedPool-Worker-1] | 2016-10-10 14:29:10.557000 |  10.200.176.5 |            767
+                                                               reading data from /10.200.176.51 [SharedPool-Worker-1] | 2016-10-10 14:29:10.557001 |  10.200.176.5 |            800
+                                                     Executing single-partition query on blocks [SharedPool-Worker-2] | 2016-10-10 14:29:10.557001 |  10.200.176.5 |            807
+                                                                   Acquiring sstable references [SharedPool-Worker-2] | 2016-10-10 14:29:10.557001 |  10.200.176.5 |            855
+                                                                      Merging memtable contents [SharedPool-Worker-2] | 2016-10-10 14:29:10.557001 |  10.200.176.5 |            924
+                                    Sending READ message to /10.200.176.51 [MessagingService-Outgoing-/10.200.176.51] | 2016-10-10 14:29:10.557001 |  10.200.176.5 |            982
+                                    Sending READ message to /10.200.176.51 [MessagingService-Outgoing-/10.200.176.51] | 2016-10-10 14:29:10.557001 |  10.200.176.5 |           1047
+                                    Sending READ message to /10.200.176.51 [MessagingService-Outgoing-/10.200.176.51] | 2016-10-10 14:29:10.557001 |  10.200.176.5 |           1085
+                                                              Read 1 live and 1 tombstone cells [SharedPool-Worker-2] | 2016-10-10 14:29:10.558000 |  10.200.176.5 |           1140
+                                    Sending READ message to /10.200.176.51 [MessagingService-Outgoing-/10.200.176.51] | 2016-10-10 14:29:10.558000 |  10.200.176.5 |           1175
+                     REQUEST_RESPONSE message received from /10.200.176.51 [MessagingService-Incoming-/10.200.176.51] | 2016-10-10 14:29:10.566000 |  10.200.176.5 |           9647
+                                                        Processing response from /10.200.176.51 [SharedPool-Worker-2] | 2016-10-10 14:29:10.566000 |  10.200.176.5 |           9726
+                     REQUEST_RESPONSE message received from /10.200.176.51 [MessagingService-Incoming-/10.200.176.51] | 2016-10-10 14:29:10.566000 |  10.200.176.5 |           9703
+                     REQUEST_RESPONSE message received from /10.200.176.51 [MessagingService-Incoming-/10.200.176.51] | 2016-10-10 14:29:10.566000 |  10.200.176.5 |           9782
+                     REQUEST_RESPONSE message received from /10.200.176.51 [MessagingService-Incoming-/10.200.176.51] | 2016-10-10 14:29:10.566000 |  10.200.176.5 |           9826
+                                                        Processing response from /10.200.176.51 [SharedPool-Worker-3] | 2016-10-10 14:29:10.566000 |  10.200.176.5 |           9826
+                                                        Processing response from /10.200.176.51 [SharedPool-Worker-3] | 2016-10-10 14:29:10.566001 |  10.200.176.5 |           9908
+                                                        Processing response from /10.200.176.51 [SharedPool-Worker-3] | 2016-10-10 14:29:10.566001 |  10.200.176.5 |           9959
+                                                                                                     Request complete | 2016-10-10 14:29:10.566391 |  10.200.176.5 |          10391
+
+
+cqlsh> select block_hash from dedup.blocks where block_hash in ('a','b','c','d','e');
+
+ block_hash
+------------
+          a
+          b
+          c
+          d
+          e
+
+(5 rows)
+
+Tracing session: eae9ee70-8ef5-11e6-82b1-d3d302e39b20
+
+ activity                                                                                                     | timestamp                  | source        | source_elapsed
+--------------------------------------------------------------------------------------------------------------+----------------------------+---------------+----------------
+                                                                                           Execute CQL3 query | 2016-10-10 14:29:14.072000 |  10.200.176.5 |              0
+                           READ message received from /10.200.176.5 [MessagingService-Incoming-/10.200.176.5] | 2016-10-10 14:29:11.279000 | 10.200.176.51 |            238
+                                             Executing single-partition query on blocks [SharedPool-Worker-1] | 2016-10-10 14:29:11.280000 | 10.200.176.51 |            375
+                                                           Acquiring sstable references [SharedPool-Worker-1] | 2016-10-10 14:29:11.280000 | 10.200.176.51 |            433
+                                                              Merging memtable contents [SharedPool-Worker-1] | 2016-10-10 14:29:11.280000 | 10.200.176.51 |            458
+                                                      Read 1 live and 1 tombstone cells [SharedPool-Worker-1] | 2016-10-10 14:29:11.280000 | 10.200.176.51 |            632
+                                                    Enqueuing response to /10.200.176.5 [SharedPool-Worker-1] | 2016-10-10 14:29:11.280000 | 10.200.176.51 |            679
+                  Sending REQUEST_RESPONSE message to /10.200.176.5 [MessagingService-Outgoing-/10.200.176.5] | 2016-10-10 14:29:11.280000 | 10.200.176.51 |            934
+                           READ message received from /10.200.176.5 [MessagingService-Incoming-/10.200.176.5] | 2016-10-10 14:29:11.293000 | 10.200.176.51 |             10
+                                             Executing single-partition query on blocks [SharedPool-Worker-4] | 2016-10-10 14:29:11.295000 | 10.200.176.51 |           2325
+                                                           Acquiring sstable references [SharedPool-Worker-4] | 2016-10-10 14:29:11.295000 | 10.200.176.51 |           2441
+                                                              Merging memtable contents [SharedPool-Worker-4] | 2016-10-10 14:29:11.295000 | 10.200.176.51 |           2464
+                                                      Read 1 live and 1 tombstone cells [SharedPool-Worker-4] | 2016-10-10 14:29:11.296000 | 10.200.176.51 |           2992
+                                                    Enqueuing response to /10.200.176.5 [SharedPool-Worker-4] | 2016-10-10 14:29:11.296000 | 10.200.176.51 |           3115
+                  Sending REQUEST_RESPONSE message to /10.200.176.5 [MessagingService-Outgoing-/10.200.176.5] | 2016-10-10 14:29:11.296000 | 10.200.176.51 |           3389
+                           READ message received from /10.200.176.5 [MessagingService-Incoming-/10.200.176.5] | 2016-10-10 14:29:11.298000 | 10.200.176.51 |             25
+                                             Executing single-partition query on blocks [SharedPool-Worker-7] | 2016-10-10 14:29:11.298000 | 10.200.176.51 |             81
+                                                           Acquiring sstable references [SharedPool-Worker-7] | 2016-10-10 14:29:11.298000 | 10.200.176.51 |            103
+                                                              Merging memtable contents [SharedPool-Worker-7] | 2016-10-10 14:29:11.298000 | 10.200.176.51 |            123
+                                                      Read 1 live and 1 tombstone cells [SharedPool-Worker-7] | 2016-10-10 14:29:11.298000 | 10.200.176.51 |            211
+                                                    Enqueuing response to /10.200.176.5 [SharedPool-Worker-7] | 2016-10-10 14:29:11.298000 | 10.200.176.51 |            243
+                  Sending REQUEST_RESPONSE message to /10.200.176.5 [MessagingService-Outgoing-/10.200.176.5] | 2016-10-10 14:29:11.299000 | 10.200.176.51 |           1250
+                           READ message received from /10.200.176.5 [MessagingService-Incoming-/10.200.176.5] | 2016-10-10 14:29:11.301000 | 10.200.176.51 |             57
+                                             Executing single-partition query on blocks [SharedPool-Worker-6] | 2016-10-10 14:29:11.302000 | 10.200.176.51 |            146
+                                                           Acquiring sstable references [SharedPool-Worker-6] | 2016-10-10 14:29:11.302000 | 10.200.176.51 |            191
+                                                              Merging memtable contents [SharedPool-Worker-6] | 2016-10-10 14:29:11.302000 | 10.200.176.51 |            209
+                                                      Read 1 live and 1 tombstone cells [SharedPool-Worker-6] | 2016-10-10 14:29:11.302000 | 10.200.176.51 |            283
+                                                    Enqueuing response to /10.200.176.5 [SharedPool-Worker-6] | 2016-10-10 14:29:11.302000 | 10.200.176.51 |            315
+                  Sending REQUEST_RESPONSE message to /10.200.176.5 [MessagingService-Outgoing-/10.200.176.5] | 2016-10-10 14:29:11.302000 | 10.200.176.51 |            835
+ Parsing select block_hash from dedup.blocks where block_hash in ('a','b','c','d','e'); [SharedPool-Worker-1] | 2016-10-10 14:29:14.072000 |  10.200.176.5 |            262
+                                                                    Preparing statement [SharedPool-Worker-1] | 2016-10-10 14:29:14.072000 |  10.200.176.5 |            450
+                                                       reading data from /10.200.176.51 [SharedPool-Worker-1] | 2016-10-10 14:29:14.072001 |  10.200.176.5 |            738
+                            Sending READ message to /10.200.176.51 [MessagingService-Outgoing-/10.200.176.51] | 2016-10-10 14:29:14.073000 |  10.200.176.5 |           1104
+             REQUEST_RESPONSE message received from /10.200.176.51 [MessagingService-Incoming-/10.200.176.51] | 2016-10-10 14:29:14.079000 |  10.200.176.5 |           7429
+                                                Processing response from /10.200.176.51 [SharedPool-Worker-4] | 2016-10-10 14:29:14.079000 |  10.200.176.5 |           7776
+                                                                   Read-repair DC_LOCAL [SharedPool-Worker-1] | 2016-10-10 14:29:14.080000 |  10.200.176.5 |           8448
+                                                       reading data from /10.200.176.50 [SharedPool-Worker-1] | 2016-10-10 14:29:14.080000 |  10.200.176.5 |           8557
+                                             Executing single-partition query on blocks [SharedPool-Worker-8] | 2016-10-10 14:29:14.080000 |  10.200.176.5 |           8766
+                            Sending READ message to /10.200.176.50 [MessagingService-Outgoing-/10.200.176.50] | 2016-10-10 14:29:14.080000 |  10.200.176.5 |           8795
+                                                           Acquiring sstable references [SharedPool-Worker-8] | 2016-10-10 14:29:14.080000 |  10.200.176.5 |           8818
+                                                              Merging memtable contents [SharedPool-Worker-8] | 2016-10-10 14:29:14.080000 |  10.200.176.5 |           8858
+                                                      Read 1 live and 1 tombstone cells [SharedPool-Worker-8] | 2016-10-10 14:29:14.081000 |  10.200.176.5 |           9058
+                                                                   Read-repair DC_LOCAL [SharedPool-Worker-1] | 2016-10-10 14:29:14.081000 |  10.200.176.5 |           9216
+                                                       reading data from /10.200.176.51 [SharedPool-Worker-1] | 2016-10-10 14:29:14.081000 |  10.200.176.5 |           9282
+                           READ message received from /10.200.176.5 [MessagingService-Incoming-/10.200.176.5] | 2016-10-10 14:29:14.083000 | 10.200.176.50 |             30
+                                             Executing single-partition query on blocks [SharedPool-Worker-1] | 2016-10-10 14:29:14.083000 | 10.200.176.50 |            430
+                                                           Acquiring sstable references [SharedPool-Worker-1] | 2016-10-10 14:29:14.083000 | 10.200.176.50 |            510
+                                                              Merging memtable contents [SharedPool-Worker-1] | 2016-10-10 14:29:14.083000 | 10.200.176.50 |            541
+                                                      Read 1 live and 1 tombstone cells [SharedPool-Worker-1] | 2016-10-10 14:29:14.084000 | 10.200.176.50 |            963
+                                                    Enqueuing response to /10.200.176.5 [SharedPool-Worker-1] | 2016-10-10 14:29:14.084000 | 10.200.176.50 |           1017
+                  Sending REQUEST_RESPONSE message to /10.200.176.5 [MessagingService-Outgoing-/10.200.176.5] | 2016-10-10 14:29:14.084000 | 10.200.176.50 |           1187
+                                                       reading data from /10.200.176.50 [SharedPool-Worker-1] | 2016-10-10 14:29:14.086000 |  10.200.176.5 |          14545
+                            Sending READ message to /10.200.176.50 [MessagingService-Outgoing-/10.200.176.50] | 2016-10-10 14:29:14.086000 |  10.200.176.5 |          14704
+                            Sending READ message to /10.200.176.51 [MessagingService-Outgoing-/10.200.176.51] | 2016-10-10 14:29:14.086000 |  10.200.176.5 |          14864
+                           READ message received from /10.200.176.5 [MessagingService-Incoming-/10.200.176.5] | 2016-10-10 14:29:14.089000 | 10.200.176.50 |           5667
+                                             Executing single-partition query on blocks [SharedPool-Worker-1] | 2016-10-10 14:29:14.089000 | 10.200.176.50 |           5793
+                                                           Acquiring sstable references [SharedPool-Worker-1] | 2016-10-10 14:29:14.089000 | 10.200.176.50 |           5838
+                                                              Merging memtable contents [SharedPool-Worker-1] | 2016-10-10 14:29:14.089000 | 10.200.176.50 |           5858
+                                                      Read 1 live and 1 tombstone cells [SharedPool-Worker-1] | 2016-10-10 14:29:14.089000 | 10.200.176.50 |           5996
+                                                    Enqueuing response to /10.200.176.5 [SharedPool-Worker-1] | 2016-10-10 14:29:14.089000 | 10.200.176.50 |           6032
+             REQUEST_RESPONSE message received from /10.200.176.50 [MessagingService-Incoming-/10.200.176.50] | 2016-10-10 14:29:14.090000 |  10.200.176.5 |          18773
+                                                Processing response from /10.200.176.50 [SharedPool-Worker-3] | 2016-10-10 14:29:14.091000 |  10.200.176.5 |          19046
+                                                                 Initiating read-repair [SharedPool-Worker-3] | 2016-10-10 14:29:14.091000 |  10.200.176.5 |          19113
+             REQUEST_RESPONSE message received from /10.200.176.51 [MessagingService-Incoming-/10.200.176.51] | 2016-10-10 14:29:14.091000 |  10.200.176.5 |          19439
+                                                Processing response from /10.200.176.51 [SharedPool-Worker-6] | 2016-10-10 14:29:14.091000 |  10.200.176.5 |          19777
+                                                       reading data from /10.200.176.51 [SharedPool-Worker-1] | 2016-10-10 14:29:14.092000 |  10.200.176.5 |          19988
+                  Sending REQUEST_RESPONSE message to /10.200.176.5 [MessagingService-Outgoing-/10.200.176.5] | 2016-10-10 14:29:14.092000 | 10.200.176.50 |           9309
+                            Sending READ message to /10.200.176.51 [MessagingService-Outgoing-/10.200.176.51] | 2016-10-10 14:29:14.092000 |  10.200.176.5 |          20120
+             REQUEST_RESPONSE message received from /10.200.176.51 [MessagingService-Incoming-/10.200.176.51] | 2016-10-10 14:29:14.094000 |  10.200.176.5 |          22839
+                                                Processing response from /10.200.176.51 [SharedPool-Worker-8] | 2016-10-10 14:29:14.094000 |  10.200.176.5 |          22935
+                                                       reading data from /10.200.176.51 [SharedPool-Worker-1] | 2016-10-10 14:29:14.095000 |  10.200.176.5 |          23129
+                            Sending READ message to /10.200.176.51 [MessagingService-Outgoing-/10.200.176.51] | 2016-10-10 14:29:14.095000 |  10.200.176.5 |          23415
+             REQUEST_RESPONSE message received from /10.200.176.50 [MessagingService-Incoming-/10.200.176.50] | 2016-10-10 14:29:14.096000 |  10.200.176.5 |          24777
+             REQUEST_RESPONSE message received from /10.200.176.51 [MessagingService-Incoming-/10.200.176.51] | 2016-10-10 14:29:14.097000 |  10.200.176.5 |          25743
+                                               Processing response from /10.200.176.50 [SharedPool-Worker-11] | 2016-10-10 14:29:14.097000 |  10.200.176.5 |          25882
+                                                                Initiating read-repair [SharedPool-Worker-11] | 2016-10-10 14:29:14.097000 |  10.200.176.5 |          25950
+                                                Processing response from /10.200.176.51 [SharedPool-Worker-4] | 2016-10-10 14:29:14.098000 |  10.200.176.5 |          26342
+                                                                                             Request complete | 2016-10-10 14:29:14.098555 |  10.200.176.5 |          26555
+```
+
 
 ## Caveat found during implementation
 
