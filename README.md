@@ -1,4 +1,4 @@
-# casstor
+# CASStor
 
 CASStor is a simple PoC of a cloud storage using Apache Cassandra.
 
