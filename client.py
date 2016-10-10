@@ -61,11 +61,13 @@ class StorageClient(object):
         hashes = (hashes + ['0'] * 5)[:5]
         existing_blocks = {r.block_hash: r.block_size for r in self.session.execute(prep_check_block, hashes)}
         ret = []
+        batch = BatchStatement()
         for c in chunks:
             exists = existing_blocks.get(c.hash) is not None
             if not exists:
-                self.store_block(c.hash, c.content)
+                batch.add(self.prepared_insert_block, (c.hash, c.size, c.content))
             ret.append(Block(c.offset, c.size, c.hash, not exists, None))
+        self.session.execute(batch)
         return ret
 
     def store_file(self, dst_path, blocks):
