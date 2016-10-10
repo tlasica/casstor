@@ -292,6 +292,123 @@ setting in cassandra.yaml:
 batch_size_fail_threshold_in_kb: 50
 ```
 
+### Try DSE Search
+
+I wanted to see if using DSE Search can improve deduplication write peformance.
+To do this we need a core, with block_hash and block_size fields:
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<schema name="autoSolrSchema" version="1.5">
+<types>
+<fieldType class="org.apache.solr.schema.StrField" name="StrField"/>
+<fieldType class="org.apache.solr.schema.TrieIntField" name="TrieIntField"/>
+</types>
+<fields>
+<field indexed="true" multiValued="false" name="block_hash" stored="true" type="StrField"/>
+<field indexed="true" multiValued="false" name="block_size" stored="true" type="TrieIntField"/>
+</fields>
+<uniqueKey>block_hash</uniqueKey>
+</schema>
+```
+
+```
+select block_hash, block_size from block where solr_query='block_hash:34fdx...';
+```
+As expected using DSE Search for checking if block exists does not bring any benefits for several reasons:
+
+1. reading from C* by partition key is usually super fast
+2. *DSE Search queries using solr_query* cannot be prepared
+
+To solve (2) we may need to use Solr HTTP API. Not tested. 
+
+### Can we benefit from row cache?
+
+With current implementation we check if block exists using query similar to this:
+```sql
+select block_hash from blocks where block_hash=?
+```
+But table `blocks` is huge, it contains all the binary data in our storage.
+Which basically means no simple caching besides key cache.
+
+To enable this we need to create additional table:
+```
+create table existing_blocks(block_hash text primary key) with caching {'key':'ALL', 'rows_per_partition':'ALL'};
+```
+and globally enable row cache in [cassandra.yaml config file](https://docs.datastax.com/en/cassandra/2.1/cassandra/configuration/configCassandra_yaml_r.html#reference_ds_qfg_n1r_1k__row_cache_size_in_mb).
+Following command should work but it does not (another bug?):
+```
+nodetool setcachecapacity 50 20 10
+```
+
+The we can check if indeed row cache is used:
+```
+nodetool info
+...
+Key Cache              : entries 5411, size 674.16 KB, capacity 50 MB, 13430 hits, 18844 requests, 0.713 recent hit rate, 14400 save period in seconds
+Row Cache              : entries 5360, size 5.23 KB, capacity 20 MB, 163013 hits, 181658 requests, 0.897 recent hit rate, 0 save period in seconds
+Counter Cache          : entries 0, size 0 bytes, capacity 10 MB, 0 hits, 0 requests, NaN recent hit rate, 7200 save period in seconds
+```
+or by looking at tracing:
+```
+cqlsh> tracing on
+Now Tracing is enabled
+cqlsh> select block_hash from casstor_meta.existing_blocks where block_hash='f5b9cb5a142654148f65eae0764581e186818baf92d436ab79b88b7e07765024';
+
+ block_hash
+------------------------------------------------------------------
+ f5b9cb5a142654148f65eae0764581e186818baf92d436ab79b88b7e07765024
+
+(1 rows)
+
+Tracing session: dc317c40-8f13-11e6-b503-c969dac369c9
+
+ activity                                                | timestamp                  | source       | source_elapsed
+---------------------------------------------------------+----------------------------+--------------+----------------
+ Execute CQL3 query                                      | 2016-10-10 18:03:34.283000 | 10.200.176.5 |              0
+ Parsing ....; [SharedPool-Worker-1]                     | 2016-10-10 18:03:34.286000 | 10.200.176.5 |           4151
+ Preparing statement [SharedPool-Worker-1]               | 2016-10-10 18:03:34.287000 | 10.200.176.5 |           5542
+ Row cache hit [SharedPool-Worker-2]                     | 2016-10-10 18:03:34.289000 | 10.200.176.5 |           6830
+ Read 1 live and 0 tombstone cells [SharedPool-Worker-2] | 2016-10-10 18:03:34.289000 | 10.200.176.5 |           7080
+ Request complete                                        | 2016-10-10 18:03:34.290548 | 10.200.176.5 |           7548
+
+
+cqlsh> select block_hash from casstor_data.blocks where block_hash='f5b9cb5a142654148f65eae0764581e186818baf92d436ab79b88b7e07765024';
+
+ block_hash
+------------------------------------------------------------------
+ f5b9cb5a142654148f65eae0764581e186818baf92d436ab79b88b7e07765024
+
+(1 rows)
+
+Tracing session: e4d7b030-8f13-11e6-b503-c969dac369c9
+
+ activity                                                                       | timestamp                  | source       | source_elapsed
+--------------------------------------------------------------------------------+----------------------------+--------------+----------------
+ Execute CQL3 query                                                             | 2016-10-10 18:03:48.787000 | 10.200.176.5 |              0
+ Parsing select block_hash from casstor_data.blocks ....; [SharedPool-Worker-1] | 2016-10-10 18:03:48.787000 | 10.200.176.5 |            439
+ Preparing statement [SharedPool-Worker-1]                                      | 2016-10-10 18:03:48.787000 | 10.200.176.5 |            690
+ Executing single-partition query on blocks [SharedPool-Worker-4]               | 2016-10-10 18:03:48.788000 | 10.200.176.5 |           1769
+ Acquiring sstable references [SharedPool-Worker-4]                             | 2016-10-10 18:03:48.789000 | 10.200.176.5 |           1993
+ Merging memtable contents [SharedPool-Worker-4]                                | 2016-10-10 18:03:48.789000 | 10.200.176.5 |           2187
+ Merging data from sstable 8 [SharedPool-Worker-4]                              | 2016-10-10 18:03:48.789000 | 10.200.176.5 |           2338
+ Bloom filter allows skipping sstable 8 [SharedPool-Worker-4]                   | 2016-10-10 18:03:48.789001 | 10.200.176.5 |           2532
+ Merging data from sstable 7 [SharedPool-Worker-4]                              | 2016-10-10 18:03:48.789001 | 10.200.176.5 |           2656
+ Bloom filter allows skipping sstable 7 [SharedPool-Worker-4]                   | 2016-10-10 18:03:48.789001 | 10.200.176.5 |           2782
+ Merging data from sstable 6 [SharedPool-Worker-4]                              | 2016-10-10 18:03:48.789001 | 10.200.176.5 |           2856
+ Bloom filter allows skipping sstable 6 [SharedPool-Worker-4]                   | 2016-10-10 18:03:48.789001 | 10.200.176.5 |           2932
+ Merging data from sstable 5 [SharedPool-Worker-4]                              | 2016-10-10 18:03:48.790000 | 10.200.176.5 |           3035
+ Partition index with 0 entries found for sstable 5 [SharedPool-Worker-4]       | 2016-10-10 18:03:48.790000 | 10.200.176.5 |           3378
+ Read 1 live and 0 tombstone cells [SharedPool-Worker-4]                        | 2016-10-10 18:03:48.793000 | 10.200.176.5 |           5926
+ speculating read retry on /10.200.176.51 [SharedPool-Worker-1]                 | 2016-10-10 18:03:48.795000 | 10.200.176.5 |           1652
+ Sending READ message to /10.200.176.51 [MessagingService-Out-/10.200.176.51]   | 2016-10-10 18:03:48.796000 | 10.200.176.5 |           9550
+ Request complete                                                               | 2016-10-10 18:03:48.796727 | 10.200.176.5 |           9727
+```
+
+This optimization does not bring immediate results but I suspect it may benefit with growing system,
+as row cache on such a simple table can be very memory effective. 
+
+But it is a trade-off: one more table to update and two table to keep consistent for space reclamation.
+ 
 ## Unexpected and not nice
 
 ### Int overflow for aggregations
