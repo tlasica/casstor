@@ -279,9 +279,67 @@ select block_hash from dedup.blocks where block_hash in ('a','b','c','d','e');
 
 Seems that requests are not sent to 3rd node at all after having enough rows from querying 2 cluster nodes. 
 
+### To batch or not to batch
 
+When adding blocks to the file current implementation uses batches of 101 rows.
+The experiment with writing to `files` table w/o batches showed significant performance degradation,
+from 43 MB/s to around 27 MB/s for duplicate writes.
 
-## Caveat found during implementation
+It is important to remember that **there is max batch size** in Cassandra, controlled by
+setting in cassandra.yaml:
+```
+# Fail any batch exceeding this value. 50kb (10x warn threshold) by default.
+batch_size_fail_threshold_in_kb: 50
+```
+
+## Unexpected and not nice
+
+### Int overflow for aggregations
+
+Calculating total storage deduplication is quite simple.
+First we need to calculate total amount of blocks as *B*
+and then total size of all files kept as *F*.
+By comparing *B* and *F* we know how much we gain.
+
+First problem is performance - this will not work fast and will use a lot of resources.
+But as this is not a common operation we can keep it simple.
+It can be improved by separating metadata (block exists) from actual block content.
+
+But there is also a problem with int overflow for aggregation:
+```sql
+cqlsh> select sum(block_size) from casstor_data.blocks;
+
+ system.sum(block_size)
+------------------------
+              777631166
+
+cqlsh> select sum(block_size) from casstor_meta.files;
+
+ system.sum(block_size)
+------------------------
+            -1939570723
+
+```
+
+And this to be honest is in my opinion a bug.
+
+### Automatic paging in python driver
+
+Using python driver on a queries that return more than 5000 rows can be tricky.
+If you use this construction:
+```python
+rows = session.execute(q)
+for r in rows:
+    # process r
+```
+you are in trouble because python driver will automatically turn on paging and return only first 5000 rows (default_fetch_size).
+So it is much safer to use:
+```python
+for r in session.execute(q):
+   # process r
+```   
+
+It is well documented: https://datastax.github.io/python-driver/query_paging.html
 
 ## Summary
 
