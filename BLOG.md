@@ -404,9 +404,8 @@ Tracing session: e4d7b030-8f13-11e6-b503-c969dac369c9
  Request complete                                                               | 2016-10-10 18:03:48.796727 | 10.200.176.5 |           9727
 ```
 
-This optimization does not bring immediate results but I suspect it may benefit with growing system,
-as row cache on such a simple table can be very memory effective. 
-
+This optimization does not bring immediate results because asking `blocks` uses key cache.
+I suspect it may benefit with growing system, as row cache on such a simple table can be very memory effective. 
 But it is a trade-off: one more table to update and two table to keep consistent for space reclamation.
  
 ## Unexpected and not nice
@@ -458,6 +457,35 @@ for r in session.execute(q):
 
 It is well documented: https://datastax.github.io/python-driver/query_paging.html
 
+## Multiple clients
+
+Let's test CASStor with 3 clients (instead of 1) with concurrent load.
+Here are the results:
+
+|Test|Client 1|Client 2|Client 3|Comments|
+|----|----------:|--------|
+|new block writes|21 MB/s|20 MB/s|20 MB/s|Expected degradation, probably due to io|
+|duplicate writes|40 MB/s|40 MB/s|42 MB/s|Decreased vs single client|
+|restore|65 MB/s|50 MB/s|72 MB/s|Same as for single client|
+
+It seems performance is client bound at the moment :-)
+
 ## Summary
 
+Writing CASStor was an interesting experience.
+System is working and can be benchmarked.
+
+Lessons learned (or confirmed):
+* using multiple concurrent C* workers can indeed improve performance
+* batching writes on small rows can improve performance
+* reading multiple small rows in single query can improve performance
+* aggregation functions on int in C* are not using bigint and cause int overflow
+* python is amazing for fast prototyping
+* performance bottleneck is on the python-driver side
+
 ### Next steps
+
+1. Implement space reclamation
+2. Implement delete operation
+3. Try multiprocess with python driver [blog](http://www.datastax.com/dev/blog/datastax-python-driver-multiprocessing-example-for-improved-bulk-data-throughput)
+
