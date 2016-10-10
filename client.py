@@ -19,16 +19,17 @@ Block = namedtuple('Block', ['offset', 'size', 'hash', 'is_new', 'content'])
 
 
 class StorageClient(object):
-    def __init__(self, cassandra_cluster):
+    def __init__(self, cassandra_cluster, data_ks='casstor_data', meta_ks='casstor_meta'):
         from cassandra.query import named_tuple_factory
         self.cluster = cassandra_cluster
         self.session = self.cluster.connect()
-        self.session.set_keyspace('dedup')
+        self.ks_data = data_ks
+        self.ks_meta = meta_ks
         self.session.row_factory = named_tuple_factory
         self.prepared_insert_block = self.session.prepare(
-            "insert into blocks(block_hash, block_size, content) values (?,?,?);")
+            "insert into {ks}.blocks(block_hash, block_size, content) values (?,?,?);".format(ks=self.ks_data))
         self.prepared_check_block = self.session.prepare(
-            "select count(*) from blocks where block_hash=?;")
+            "select count(*) from {ks}.blocks where block_hash=?;".format(ks=self.ks_data))
 
     def maybe_store_block(self, block_hash, block_data):
         block_exists = self.block_exists(block_hash, block_size=len(block_data))
@@ -39,11 +40,11 @@ class StorageClient(object):
 
     def block_exists(self, block_hash, block_size):
         out = self.session.execute(self.prepared_check_block, [block_hash])
-        return True if out.current_rows[0].count>0 else False
+        return True if out.current_rows[0].count > 0 else False
 
     def inc_block_usage(self, block_hash, block_size):
-        q = "update blocks_usage set num_ref = num_ref + 1 where block_hash='{h}' and block_size={s};".format(
-            h=block_hash, s=block_size)
+        q = "update {ks}.blocks_usage set num_ref = num_ref + 1 where block_hash='{h}' and block_size={s};".format(
+            ks=self.ks_meta, h=block_hash, s=block_size)
         out = self.session.execute(q)
 
     def store_block(self, block_hash, block_data):
@@ -53,7 +54,9 @@ class StorageClient(object):
     def maybe_store_chunks(self, chunks):
         assert len(chunks) <= 5
         # let's check which of them exists
-        prep_check_block = self.session.prepare("select block_hash, block_size from blocks where block_hash in (?,?,?,?,?) limit 5;")
+        q = "select block_hash, block_size from {ks}.blocks where block_hash in (?,?,?,?,?) limit 5;".format(
+            ks=self.ks_data)
+        prep_check_block = self.session.prepare(q)
         hashes = [c.hash for c in chunks]
         hashes = (hashes + ['0'] * 5)[:5]
         existing_blocks = {r.block_hash: r.block_size for r in self.session.execute(prep_check_block, hashes)}
@@ -65,10 +68,10 @@ class StorageClient(object):
             ret.append(Block(c.offset, c.size, c.hash, not exists, None))
         return ret
 
-
     def store_file(self, dst_path, blocks):
-        self.session.execute("delete from files where path='{0}';".format(dst_path))
-        q = 'insert into files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);'
+        self.session.execute("delete from {ks}.files where path='{p}';".format(ks=self.ks_meta, p=dst_path))
+        q = 'insert into files(path, {ks}.block_offset, block_hash, block_size) values (?, ?, ?, ?);'.format(
+            ks=self.ks_meta)
         prep_insert = self.session.prepare(q)
         curr_batch_size = 0
         max_batch_size = 101
@@ -86,8 +89,8 @@ class StorageClient(object):
             self.session.execute(batch)
 
     def restore_file_blocks(self, path):
-        q = "select block_offset, block_hash, block_size from files where path='{p}' order by block_offset asc;".format(
-            p=path)
+        q = "select block_offset, block_hash, block_size from {ks}.files where path='{p}' order by block_offset asc;".format(
+            ks=self.ks_meta, p=path)
         for b in self.session.execute(q):
             yield Block(b.block_offset, b.block_size, b.block_hash, None, None)
 
@@ -107,7 +110,8 @@ class StorageClient(object):
 
         # start workers
         def worker():
-            prep_q = self.session.prepare('select block_hash, content from blocks where block_hash in (?,?,?,?,?) limit 5;')
+            prep_q = self.session.prepare(
+                'select block_hash, content from {ks}.blocks where block_hash in (?,?,?,?,?) limit 5;'.format(ks=self.ks_data))
             prep_q.consistency_level = ConsistencyLevel.ONE
             batch_size = 5
             while True:
@@ -216,7 +220,7 @@ def print_store_stats(blocks, duration):
     print "existing blocks [b]: ", size_existing_blocks
     print "new blocks [b]:", size_new_blocks
     print "total size [b]:", total_size
-    print "duplication ratio:", 100 * float(size_existing_blocks)/total_size
+    print "duplication ratio:", 100 * float(size_existing_blocks) / total_size
     print "total duration [s]:", duration
     thru = total_size / duration / 1024.0 / 1024.0
     print "throughput MB/s:", thru
