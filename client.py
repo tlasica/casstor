@@ -54,14 +54,14 @@ class StorageClient(object):
     def maybe_store_chunks(self, chunks):
         assert len(chunks) <= 5
         # let's check which of them exists
-        q = "select block_hash, block_size from {ks}.blocks where block_hash in (?,?,?,?,?) limit 5;".format(
-            ks=self.ks_data)
+        q = "select block_hash from {ks}.existing_blocks where block_hash in (?,?,?,?,?) limit 5;".format(
+            ks=self.ks_meta)
         prep_check_block = self.session.prepare(q)
         q = "insert into {ks}.existing_blocks(block_hash) values (?);".format(ks=self.ks_meta)
         prep_set_exists = self.session.prepare(q)
         hashes = [c.hash for c in chunks]
         hashes = (hashes + ['0'] * 5)[:5]
-        existing_blocks = {r.block_hash: r.block_size for r in self.session.execute(prep_check_block, hashes)}
+        existing_blocks = {r.block_hash: True for r in self.session.execute(prep_check_block, hashes)}
         ret = []
         batch = BatchStatement()
         for c in chunks:
