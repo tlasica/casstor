@@ -72,20 +72,8 @@ class StorageClient(object):
         self.session.execute("delete from {ks}.files where path='{p}';".format(ks=self.ks_meta, p=dst_path))
         q = 'insert into {ks}.files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);'.format(ks=self.ks_meta)
         prep_insert = self.session.prepare(q)
-        curr_batch_size = 0
-        max_batch_size = 101
-        batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM)
         for b in blocks:
-            batch.add(prep_insert, (dst_path, b.offset, b.hash, b.size))
-            curr_batch_size += 1
-            if curr_batch_size >= max_batch_size:
-                # execute current batch and start new one
-                curr_batch_size = 0
-                self.session.execute(batch)
-                batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM)
-
-        if curr_batch_size > 0:
-            self.session.execute(batch)
+            self.session.execute(prep_insert, (dst_path, b.offset, b.hash, b.size))
 
     def restore_file_blocks(self, path):
         q = "select block_offset, block_hash, block_size from {ks}.files where path='{p}' order by block_offset asc;".format(
