@@ -53,7 +53,7 @@ class StorageClient(object):
     def maybe_store_chunks(self, chunks):
         assert len(chunks) <= 5
         # let's check which of them exists
-        prep_check_block = self.session.prepare("select block_hash, block_size from blocks where block_hash in (?,?,?,?,?);")
+        prep_check_block = self.session.prepare("select block_hash, block_size from blocks where block_hash in (?,?,?,?,?) limit 5;")
         hashes = [c.hash for c in chunks]
         hashes = (hashes + ['0'] * 5)[:5]
         existing_blocks = {r.block_hash: r.block_size for r in self.session.execute(prep_check_block, hashes)}
@@ -107,7 +107,7 @@ class StorageClient(object):
 
         # start workers
         def worker():
-            prep_q = self.session.prepare('select block_hash, content from blocks where block_hash in (?,?,?,?,?);')
+            prep_q = self.session.prepare('select block_hash, content from blocks where block_hash in (?,?,?,?,?) limit 5;')
             prep_q.consistency_level = ConsistencyLevel.ONE
             batch_size = 5
             while True:
