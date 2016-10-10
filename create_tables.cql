@@ -6,7 +6,7 @@ create keyspace casstor_meta with replication = {'class':'SimpleStrategy', 'repl
 use casstor_meta;
 create table files(path text, block_offset bigint, block_hash text, block_size int, primary key (path, block_offset) );
 create table blocks_usage(block_hash text, block_size int, num_ref counter, primary key(block_hash, block_size));
-create table existing_blocks(block_hash text primary key);
+create table existing_blocks(block_hash text primary key) with caching {'key':'ALL', 'rows_per_partition':'ALL'};
 
 // blocks have unique hash and block_size
 // we cannot keep counter in the same table as data (C* limitation)
