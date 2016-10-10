@@ -57,6 +57,8 @@ class StorageClient(object):
         q = "select block_hash, block_size from {ks}.blocks where block_hash in (?,?,?,?,?) limit 5;".format(
             ks=self.ks_data)
         prep_check_block = self.session.prepare(q)
+        q = "insert into {ks}.existing_blocks(block_hash) values (?);".format(ks=self.ks_meta)
+        prep_set_exists = self.session.prepare(q)
         hashes = [c.hash for c in chunks]
         hashes = (hashes + ['0'] * 5)[:5]
         existing_blocks = {r.block_hash: r.block_size for r in self.session.execute(prep_check_block, hashes)}
@@ -66,6 +68,7 @@ class StorageClient(object):
             exists = existing_blocks.get(c.hash) is not None
             if not exists:
                 batch.add(self.prepared_insert_block, (c.hash, c.size, c.content))
+                batch.add(prep_set_exists, [c.hash])
             ret.append(Block(c.offset, c.size, c.hash, not exists, None))
         self.session.execute(batch)
         return ret
