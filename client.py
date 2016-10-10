@@ -50,6 +50,22 @@ class StorageClient(object):
         block_size = len(block_data)
         self.session.execute(self.prepared_insert_block, (block_hash, block_size, block_data))
 
+    def maybe_store_chunks(self, chunks):
+        assert len(chunks) <= 5
+        # let's check which of them exists
+        prep_check_block = self.session.prepare("select block_hash, block_size from blocks where block_hash in (?,?,?,?,?);")
+        hashes = [c.hash for c in chunks]
+        hashes = (hashes + ['0'] * 5)[:5]
+        existing_blocks = {r.block_hash: r.block_size for r in self.session.execute(prep_check_block, hashes)}
+        ret = []
+        for c in chunks:
+            exists = existing_blocks.get(c.hash) is not None
+            if not exists:
+                self.store_block(c.hash, c.content)
+            ret.append(Block(c.offset, c.size, c.hash, not exists, None))
+        return ret
+
+
     def store_file(self, dst_path, blocks):
         self.session.execute("delete from files where path='{0}';".format(dst_path))
         q = 'insert into files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);'
@@ -136,25 +152,31 @@ def store_file(cass_client, src_path, dst_path):
     store_file_descriptor(cass_client, dst_path, blocks)
     dur = time.time() - t0
     print_store_stats(blocks, dur)
-    check_block_exists(cass_client, blocks)
+    # check_block_exists(cass_client, blocks)
     return dst_path, len(chunks)
 
 
 # TODO: connection pooling would be good idea for storage client
-def store_blocks(cass_client, src_path, chunks, num_workers=8):
+def store_blocks(cass_client, src_path, chunks, num_workers=4):
     ret = []
-    # create queue witn N elements
+    # create queue with N elements
     queue_size = num_workers
     queue = Queue(queue_size)
 
     # create storage Threads
     def worker():
         while True:
-            offset, chunk, block = queue.get()
-            h = blake2b(block, digest_size=32)
-            bh = h.hexdigest()
-            stored = cass_client.maybe_store_block(block_hash=bh, block_data=block)
-            ret.append(Block(offset, chunk, bh, stored, None))
+            chunks = queue.get()
+            # calculate hash for chunks
+            hashes = []
+            for c in chunks:
+                h = blake2b(c.content, digest_size=32)
+                hashes.append(h.hexdigest())
+            # confirm exists or store blocks from chunks
+            chunks_with_hashes = [Block(c.offset, c.size, h, None, c.content) for c, h in zip(chunks, hashes)]
+            stored_blocks = cass_client.maybe_store_chunks(chunks_with_hashes)
+            # add to results, work done
+            ret.extend(stored_blocks)
             queue.task_done()
 
     for i in range(num_workers):
@@ -164,21 +186,27 @@ def store_blocks(cass_client, src_path, chunks, num_workers=8):
 
     # start reading -> queue
     with open(src_path, 'rb') as src_file:
-        read_file_in_chunks(src_file, chunks, queue)
+        read_file_in_chunks(src_file, chunks, queue, batch_size=5)
     # wait until reading is finished
     queue.join()
     return ret
 
 
-def read_file_in_chunks(file_obj, chunks, queue):
+def read_file_in_chunks(file_obj, chunks, queue, batch_size=1):
     offset = 0
-    for chunk in chunks:
-        data = file_obj.read(chunk)
+    batch = []
+    for chunk_size in chunks:
+        data = file_obj.read(chunk_size)
         if not data:
             break
-        x = (offset, chunk, data)
-        queue.put(x)
-        offset += chunk
+        batch.append(Block(offset, chunk_size, None, None, data))
+        if len(batch) == batch_size:
+            queue.put(batch)
+            batch = []
+        offset += chunk_size
+
+    if batch:
+        queue.put(batch)
 
 
 def print_store_stats(blocks, duration):
