@@ -69,7 +69,7 @@ class StorageClient(object):
             if not exists:
                 if not batch:
                     batch = BatchStatement()
-                batch.add(self.prepared_insert_block, (c.hash, c.size, c.content))
+                self.session.execute(self.prepared_insert_block, (c.hash, c.size, c.content))
                 batch.add(prep_set_exists, [c.hash])
             ret.append(Block(c.offset, c.size, c.hash, not exists, None))
         if batch:
