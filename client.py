@@ -70,8 +70,7 @@ class StorageClient(object):
 
     def store_file(self, dst_path, blocks):
         self.session.execute("delete from {ks}.files where path='{p}';".format(ks=self.ks_meta, p=dst_path))
-        q = 'insert into files(path, {ks}.block_offset, block_hash, block_size) values (?, ?, ?, ?);'.format(
-            ks=self.ks_meta)
+        q = 'insert into {ks}.files(path, block_offset, block_hash, block_size) values (?, ?, ?, ?);'.format(ks=self.ks_meta)
         prep_insert = self.session.prepare(q)
         curr_batch_size = 0
         max_batch_size = 101
