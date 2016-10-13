@@ -13,6 +13,8 @@ There is a [good post](http://www.datastax.com/dev/blog/improved-cassandra-2-1-s
 
 Cassandra stress let you test in fact one table at a time. So I decided to test `existing_blocks` table. In original CASStor approach it has only primary key and is used as a distributed set. Unfortunately `cassandra-stress` will fail with so simple table as it requires at least one non-pk column to be present.
 
+## Which approach should I take for querying existing_blocks table?
+
 My stress.existing_blocks.yaml file:
 ```yaml
 keyspace: casstor_meta
@@ -44,6 +46,13 @@ queries:
 ```
 
 As you see I consider three different approaches to check if block exists.
+
+So I loaded 10G of block_hashes and measure latency and throughput (ops/s) with increased number of client threads.
+
+![Throughput](plots/existing_blocks/thru-comparison-no-row-cache.png)
+![Latency](plots/existing_blocks/latency-comparison-no-row-cache.png)
+
+Plots confirm that with so many blocks to check during single write operation (around 10k for 1G file) it is reasonable to put N hashes in one query. Presented results are with 5 queries which means that basically we get around 4.6 x better throughput no "five" approach with no penalty on 95perc latency.
 
 
 ## Should I use row cache for existing_blocks?
