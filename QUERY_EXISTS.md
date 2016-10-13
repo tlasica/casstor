@@ -3,6 +3,8 @@ To check which of the approaches can do better I decided to go with `cassandra-s
 
 There is a [good post](http://www.datastax.com/dev/blog/improved-cassandra-2-1-stress-tool-benchmark-any-schema) how to use it and very good video from Cassandra Summit 2016 [here](https://youtu.be/it4yqHXu4TE?list=PLm-EPIkBI3YoiA-02vufoEj4CgYvIQgIk).
 
+Please notice latency == 95th percentile
+
 ## Questions to be answered
 
 1. Should I query `blocks` directly or use `existing_blocks`?
@@ -12,6 +14,17 @@ There is a [good post](http://www.datastax.com/dev/blog/improved-cassandra-2-1-s
 ## cassandra-stress
 
 Cassandra stress let you test in fact one table at a time. So I decided to test `existing_blocks` table. In original CASStor approach it has only primary key and is used as a distributed set. Unfortunately `cassandra-stress` will fail with so simple table as it requires at least one non-pk column to be present.
+
+## Should I query `blocks` directly or use `existing_blocks`?
+
+This is a tradeoff between additional writes, keeping same information in 2 places and scalability. I used [this yaml] (/stress/stress.blocks.yaml) to test using `cassandra-stress`. From the plots below I would say none of the approaches on `blocks` table scales well:
+
+![Blocks Throughput](plots/existing_blocks/query-blocks-thru.png)
+![Blocks Latency](plots/existing_blocks/query-blocks-latency.png)
+
+While it scales better with `existing_blocks`:
+
+
 
 ## Which approach should I take for querying existing_blocks table?
 
