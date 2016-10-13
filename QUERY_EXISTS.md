@@ -3,6 +3,8 @@ To check which of the approaches can do better I decided to go with `cassandra-s
 
 There is a [good post](http://www.datastax.com/dev/blog/improved-cassandra-2-1-stress-tool-benchmark-any-schema) how to use it and very good video from Cassandra Summit 2016 [here](https://youtu.be/it4yqHXu4TE?list=PLm-EPIkBI3YoiA-02vufoEj4CgYvIQgIk).
 
+Please notice latency == 95th percentile
+
 ## Questions to be answered
 
 1. Should I query `blocks` directly or use `existing_blocks`?
