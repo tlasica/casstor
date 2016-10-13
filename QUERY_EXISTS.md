@@ -1,3 +1,5 @@
+# How to query Cassandra if the block exists?
+
 Essential query for deduplication is check, if particular block exists (is present in the storage).
 To check which of the approaches can do better I decided to go with `cassandra-stress` in user mode.
 
@@ -96,10 +98,11 @@ alter table casstor_meta.existing_blocks_2 with caching = {'keys':'ALL', 'rows_p
 ![Five hashes per query](plots/existing_blocks/five-query-row-cache.png)
 ![Select count](plots/existing_blocks/count-query-row-cache.png)
 
+## Summary
 
+As expected from the scalability performance it is a good idea to have separate lightweight table with block hashes, as it's memtables and sstables can handle much more partitions than blocks with binary content of siginificant size.
 
-
-
+It is also a good idea to ask for multiple hashes in one query. It does not decrease throughput nor latency and the boilerplate of cql query is minimized.
 
 ## Links
 
