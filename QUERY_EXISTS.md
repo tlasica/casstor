@@ -19,6 +19,15 @@ Cassandra stress let you test in fact one table at a time. So I decided to test 
 
 This is a tradeoff between additional writes, keeping same information in 2 places and scalability. I used [this yaml] (/stress/stress.blocks.yaml) to test using `cassandra-stress`. 
 
+Green bars from
+```
+select block_hash from existing_blocks where block_hash=?
+```
+while red ones from
+```
+select block_hash, block_size from existing_blocks where block_hash=?
+```
+
 ![Throughput comparison](plots/existing_blocks/blocks-vs-existing-blocks-thru.png)
 
 From the plots below I would say none of the approaches on `blocks` table scales well:
