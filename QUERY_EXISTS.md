@@ -17,7 +17,11 @@ Cassandra stress let you test in fact one table at a time. So I decided to test 
 
 ## Should I query `blocks` directly or use `existing_blocks`?
 
-This is a tradeoff between additional writes, keeping same information in 2 places and scalability. I used [this yaml] (/stress/stress.blocks.yaml) to test using `cassandra-stress`. From the plots below I would say none of the approaches on `blocks` table scales well:
+This is a tradeoff between additional writes, keeping same information in 2 places and scalability. I used [this yaml] (/stress/stress.blocks.yaml) to test using `cassandra-stress`. 
+
+![Throughput comparison](plots/existing_blocks/blocks-vs-existing-blocks-thru.png)
+
+From the plots below I would say none of the approaches on `blocks` table scales well:
 
 ![Blocks Throughput](plots/existing_blocks/query-blocks-thru.png)
 ![Blocks Latency](plots/existing_blocks/query-blocks-latency.png)
