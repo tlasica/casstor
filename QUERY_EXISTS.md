@@ -46,6 +46,24 @@ queries:
 As you see I consider three different approaches to check if block exists.
 
 
+## Should I use row cache for existing_blocks?
+
+Row cache has to be enabled in the cassandra.yaml. Unfortunately `nodetool setcachecapacity` can change the size but will not enable row cache if it is set to 0 in the cassandra.yaml file.
+
+To enable row cache for a table:
+```
+alter table casstor_meta.existing_blocks_2 with caching = {'keys':'ALL', 'rows_per_partition':'ALL'};
+```
+
+`cassandra-stress` will generate completely random data and then will also query them using random data. In fact the hit ratio for the row cache was not more than 15%. In such situation using row_cache seem to be unnecessary or even harmfull as it seem to have scalability problems with increased number of clients:
+
+![One hash per query](plots/existing_blocks/one-query-row-cache.png)
+![Five hashes per query](plots/existing_blocks/five-query-row-cache.png)
+![Select count](plots/existing_blocks/count-query-row-cache.png)
+
+
+
+
 
 
 ## Links
