@@ -31,3 +31,6 @@ queries:
     count:
         cql: select count(*) from blocks where block_hash = ?
 
+    exists_hash_only:
+        cql: select block_hash from blocks where block_hash = ?
+
