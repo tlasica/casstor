@@ -1,0 +1,32 @@
+### DML ###
+
+keyspace: casstor_meta
+
+table: existing_blocks_2
+
+table_definition: | 
+    CREATE TABLE casstor_meta.existing_blocks_2 (
+    block_hash text PRIMARY KEY, block_size int)
+
+columnspec:
+  - name: block_hash
+    size: fixed(32)
+  - name: block_size
+    size: uniform(8192..262200)
+
+insert:
+    partitions: fixed(1)
+#    batchtype: UNLOGGED
+
+queries:
+    exists_one:
+        cql: select block_hash, block_size from existing_blocks_2 where block_hash = ? limit 1
+        #fields: allrows
+
+    exists_five:
+        cql: select block_hash, block_size from existing_blocks_2 where block_hash in (?,?,?,?,?) limit 5
+        #fields: allrows
+
+    exists_count:
+        cql: select count(*) from existing_blocks_2 where block_hash = ? limit 1
+

@@ -1,0 +1,33 @@
+keyspace: casstor_data
+
+table: blocks
+
+table_definition: | 
+    CREATE TABLE casstor_data.blocks (
+    block_hash text PRIMARY KEY,
+    block_size int,
+    content blob
+    )
+
+columnspec:
+  - name: block_hash
+    size: fixed(32)
+  - name: block_size
+    size: uniform(8192..262200)
+  - name: content
+    size: uniform(8192..262200)
+
+insert:
+    partitions: fixed(1)
+#    batchtype: UNLOGGED
+
+queries:
+    exists_limit:
+        cql: select block_hash, block_size from blocks where block_hash = ? limit 1
+
+    exists:
+        cql: select block_hash, block_size from blocks where block_hash = ?
+
+    count:
+        cql: select count(*) from blocks where block_hash = ?
+
