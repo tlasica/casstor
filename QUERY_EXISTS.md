@@ -13,6 +13,18 @@ There is a [good post](http://www.datastax.com/dev/blog/improved-cassandra-2-1-s
 
 Cassandra stress let you test in fact one table at a time. So I decided to test `existing_blocks` table. In original CASStor approach it has only primary key and is used as a distributed set. Unfortunately `cassandra-stress` will fail with so simple table as it requires at least one non-pk column to be present.
 
+## Should I query `blocks` directly or use `existing_blocks`?
+
+This is a tradeoff between additional writes, keeping same information in 2 places and scalability.
+Looking at the plots below I would say none of the approaches on `blocks` table scales well:
+
+![Blocks Throughput](plots/existing_blocks/query-blocks-thru.png)
+![Blocks Latency](plots/existing_blocks/query-blocks-latency.png)
+
+While it scales better with `existing_blocks`:
+
+
+
 ## Which approach should I take for querying existing_blocks table?
 
 My stress.existing_blocks.yaml file:
