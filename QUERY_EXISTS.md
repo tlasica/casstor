@@ -76,5 +76,6 @@ alter table casstor_meta.existing_blocks_2 with caching = {'keys':'ALL', 'rows_p
 
 
 ## Links
-http://www.sestevez.com/sestevez/CassandraDataModeler/
-https://tobert.github.io/pages/als-cassandra-21-tuning-guide.html
+
+* http://www.sestevez.com/sestevez/CassandraDataModeler/
+* https://tobert.github.io/pages/als-cassandra-21-tuning-guide.html
