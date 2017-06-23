@@ -16,6 +16,7 @@ CASStor is a simple PoC of a cloud storage using Apache Cassandra.
 ./client.py write {local-file} {destination-id}
 ./client.py read {id} {destination-local-file}
 ```
-## Conclusions
+## Read
 
-More about design, implementation and performance results is [here](BLOG.md)
+1. [Design, initial implementation and performance results](BLOG.md)
+2. [How to query Cassandra if block exists - performance analysis](QUERY_EXISTS.md)
